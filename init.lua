@@ -184,7 +184,7 @@ local function DrawMainWindow()
                 ImPlot.SetupAxes("Time (s)", string.format("Exp in %sths", DefaultConfig.GraphMultiplier))
             end
             ImPlot.SetupAxisLimits(ImAxis.X1, os.clock() - DefaultConfig.ExpSecondsToStore, os.clock(), ImGuiCond.Always)
-            ImPlot.SetupAxisLimits(ImAxis.Y1, 1, CurMaxExpPerSec / 100, ImGuiCond.Always)
+            ImPlot.SetupAxisLimits(ImAxis.Y1, 1, CurMaxExpPerSec * multiplier / 100, ImGuiCond.Always)
 
             ImPlot.PushStyleVar(ImPlotStyleVar.FillAlpha, 0.35)
             RenderShaded("Exp", XPEvents.Exp, XPEvents.AA, multiplier)
