@@ -41,15 +41,17 @@ local TrackXP            = {
 local DefaultConfig      = {
     ['ExpSecondsToStore'] = 1800,
     ['ExpPlotFillLines']  = true,
-    ['GraphMultiplier']   = 3,
+    ['GraphMultiplier']   = 1,
 }
 
+local multiplier = tonumber(DefaultConfig.GraphMultiplier)
 
 local function ClearStats()
     TrackXP = {
         PlayerLevel = mq.TLO.Me.Level(),
         PlayerAA = mq.TLO.Me.AAPointsTotal(),
-        StartTime = os.clock(),
+        -- assume we started early so initial numbers are not super out of whack
+        StartTime = os.clock() - 60,
 
         XPTotalPerLevel = 100000,
         XPTotalDivider = 1000,
@@ -85,7 +87,7 @@ local function RenderShaded(type, currentData, otherData, multiplier)
                     local pos = ((offset + n) % count) + 1
                     local lowerBound = 0
                     if otherData and otherData.expEvents and otherData.expEvents.DataY[pos] and otherData.expEvents.DataY[pos] < currentData.expEvents.DataY[pos] then
-                        lowerBound = otherData.expEvents.DataY[pos]
+                        lowerBound = otherData.expEvents.DataY[pos] 
                     end
                     return ImPlotPoint(currentData.expEvents.DataX[pos], lowerBound)
                 end,
@@ -160,11 +162,12 @@ local function DrawMainWindow()
             ImGui.TableNextColumn()
             ImGui.Text("AA / Hr")
             ImGui.TableNextColumn()
-            ImGui.Text(string.format("%2.2f", ((TrackXP.AAExperience.Total / TrackXP.XPTotalDivider) / (os.clock() - TrackXP.StartTime)) * 60 * 60 / 100))
+            -- 15 sec intervals, only count full AAs
+            ImGui.Text(string.format("%2.2f", ((TrackXP.AAExperience.Total / TrackXP.XPTotalDivider) / (math.floor(os.clock()/15)*15 - TrackXP.StartTime)) * 60 * 60 / 100))
             ImGui.EndTable()
         end
 
-        local multiplier = tonumber(DefaultConfig.GraphMultiplier)
+
 
         -- converge on new max recalc min and maxes
         if CurMaxExpPerSec + 100 < GoalMaxExpPerSec then CurMaxExpPerSec = CurMaxExpPerSec + 100 
@@ -178,17 +181,17 @@ local function DrawMainWindow()
 
 
         if ImPlot.BeginPlot("Experience Tracker") then
-            if DefaultConfig.GraphMultiplier == 1 then
+            if multiplier == 1 then
                 ImPlot.SetupAxes("Time (s)", "Exp ")
             else
-                ImPlot.SetupAxes("Time (s)", string.format("Exp in %sths", DefaultConfig.GraphMultiplier))
+                ImPlot.SetupAxes("Time (s)", string.format("Exp in %sths", multiplier))
             end
             ImPlot.SetupAxisLimits(ImAxis.X1, os.clock() - DefaultConfig.ExpSecondsToStore, os.clock(), ImGuiCond.Always)
-            ImPlot.SetupAxisLimits(ImAxis.Y1, 1, CurMaxExpPerSec * multiplier / 100, ImGuiCond.Always)
+            ImPlot.SetupAxisLimits(ImAxis.Y1, 1, CurMaxExpPerSec, ImGuiCond.Always)
 
             ImPlot.PushStyleVar(ImPlotStyleVar.FillAlpha, 0.35)
             RenderShaded("Exp", XPEvents.Exp, XPEvents.AA, multiplier)
-            RenderShaded("AA", XPEvents.AA, XPEvents.Exp, multiplier / 100)
+            RenderShaded("AA", XPEvents.AA, XPEvents.Exp, multiplier)
             ImPlot.PopStyleVar()
 
             ImPlot.EndPlot()
@@ -262,14 +265,18 @@ local function GiveTime()
             }
         end
 
-        XPEvents.Exp.lastFrame = os.clock()
-        ---@diagnostic disable-next-line: undefined-field
-        XPEvents.Exp.expEvents:AddPoint(os.clock(), (TrackXP.Experience.Total / ((os.clock()) - TrackXP.StartTime)) * 10)
+        
 
         XPPerSecond    = (TrackXP.Experience.Total / TrackXP.XPTotalDivider) / (os.clock() - TrackXP.StartTime)
         XPToNextLevel  = TrackXP.XPTotalPerLevel - mq.TLO.Me.Exp()
+        AAXPPerSecond  = ((TrackXP.AAExperience.Total / TrackXP.XPTotalDivider) / (os.clock() - TrackXP.StartTime)) / 100
         SecondsToLevel = XPToNextLevel / (XPPerSecond * TrackXP.XPTotalDivider)
         TimeToLevel    = XPPerSecond <= 0 and "<Unknown>" or FormatTime(SecondsToLevel, "%d Days %d Hours %d Mins")
+
+        XPEvents.Exp.lastFrame = os.clock()
+        ---@diagnostic disable-next-line: undefined-field
+        XPEvents.Exp.expEvents:AddPoint(os.clock(), XPPerSecond * 60 * 60)
+
 
         if mq.TLO.Me.PctAAExp() > 0 and CheckAAExpChanged() then
             printf("\ayAA Gained: \ag%2.2f \aw|| \ayAA Total: \ag%2.2f", TrackXP.AAExperience.Gained / TrackXP.XPTotalDivider / 100,
@@ -286,11 +293,12 @@ local function GiveTime()
 
         XPEvents.AA.lastFrame = os.clock()
         ---@diagnostic disable-next-line: undefined-field
-        XPEvents.AA.expEvents:AddPoint(os.clock(), (TrackXP.AAExperience.Total / ((os.clock()) - TrackXP.StartTime)))
+        XPEvents.AA.expEvents:AddPoint(os.clock(), AAXPPerSecond * 60 * 60)
+        --XPEvents.AA.expEvents:AddPoint(os.clock(), (TrackXP.AAExperience.Total / ((os.clock()) - TrackXP.StartTime)) / 100)
+        
     end
 
-    local multiplier = tonumber(DefaultConfig.GraphMultiplier)
-    if os.clock() - LastExtentsCheck > 0.01 then
+    if os.clock() - LastExtentsCheck > 0.5 then
         GoalMaxExpPerSec = 0
         LastExtentsCheck = os.clock()
         for _, expData in pairs(XPEvents) do
