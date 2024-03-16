@@ -2,6 +2,8 @@
 -- shamelessly ripped from RGMercs Lua 
 -- as suggested by Derple
 
+-- initial version
+
 local mq                  = require('mq')
 local ImGui               = require('ImGui')
 local ImPlot              = require('ImPlot')
