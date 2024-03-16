@@ -87,7 +87,11 @@ local function RenderShaded(type, currentData, otherData, multiplier)
         local otherY = {}
 
         for idx, v in ipairs(currentData.expEvents.DataY) do
-            otherY[idx] = otherData.expEvents[idx] or 0
+            if otherData.expEvents[idx] then
+                otherY[idx] = otherData[idx] < currentData[idx] and otherData[idx] or 0
+            else
+                otherY[idx] = 0
+            end
         end
 
         if settings.ExpPlotFillLines then
