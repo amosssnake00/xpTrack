@@ -328,7 +328,7 @@ local function GiveTime()
         LastExtentsCheck = os.clock()
         for id, expData in pairs(XPEvents) do
             for idx, exp in ipairs(expData.expEvents.DataY) do
-                if id == "XP" then 
+                if id == "Exp" then 
                     exp = exp * multiplier 
                 end
                 -- is this entry visible?
