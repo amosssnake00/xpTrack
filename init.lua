@@ -14,7 +14,7 @@ local XPEvents            = {}
 local MaxStep             = 50
 local GoalMaxExpPerSec    = 0
 local CurMaxExpPerSec     = 0
-local LastExtentsCheck    = os.clock()
+local LastExtentsCheck    = 0
 local XPPerSecond         = 0
 local XPToNextLevel       = 0
 local SecondsToLevel      = 0
@@ -49,12 +49,9 @@ local DefaultConfig       = {
     ['GraphMultiplier']   = 1,
 }
 
+settings                  = DefaultConfig
 
-settings = DefaultConfig
-
-
-
-local multiplier = tonumber(settings.GraphMultiplier)
+local multiplier          = tonumber(settings.GraphMultiplier)
 
 local function ClearStats()
     TrackXP = {
@@ -81,14 +78,14 @@ local function ClearStats()
 end
 
 
-local function RenderShaded(type, currentData, otherData, multiplier)
+local function RenderShaded(type, currentData, otherData)
     if currentData then
         local count = #currentData.expEvents.DataY
         local otherY = {}
 
         for idx, v in ipairs(currentData.expEvents.DataY) do
             if otherData.expEvents[idx] then
-                otherY[idx] = otherData[idx] < currentData[idx] and otherData[idx] or 0
+                otherY[idx] = (otherData.expEvents.DataY[idx] < currentData.expEvents.DataY[idx] and otherData.expEvents.DataY[idx] or 0)
             else
                 otherY[idx] = 0
             end
@@ -159,20 +156,15 @@ local function DrawMainWindow()
             ImGui.EndTable()
         end
 
+        local ordMagDiff = 10 ^ math.floor(math.abs(math.log((CurMaxExpPerSec > 0 and CurMaxExpPerSec or 1) / (GoalMaxExpPerSec > 0 and GoalMaxExpPerSec or 1), 10)))
+
         -- converge on new max recalc min and maxes
-        if CurMaxExpPerSec + 100 < GoalMaxExpPerSec then
-            CurMaxExpPerSec = CurMaxExpPerSec + 100
-        elseif CurMaxExpPerSec + 10 < GoalMaxExpPerSec then
-            CurMaxExpPerSec = CurMaxExpPerSec + 10
-        elseif CurMaxExpPerSec < GoalMaxExpPerSec then
-            CurMaxExpPerSec = CurMaxExpPerSec + 1
+        if CurMaxExpPerSec < GoalMaxExpPerSec then
+            CurMaxExpPerSec = CurMaxExpPerSec + ordMagDiff
         end
-        if CurMaxExpPerSec - 100 > GoalMaxExpPerSec then
-            CurMaxExpPerSec = CurMaxExpPerSec - 100
-        elseif CurMaxExpPerSec - 10 > GoalMaxExpPerSec then
-            CurMaxExpPerSec = CurMaxExpPerSec - 10
-        elseif CurMaxExpPerSec > GoalMaxExpPerSec then
-            CurMaxExpPerSec = CurMaxExpPerSec - 1
+
+        if CurMaxExpPerSec > GoalMaxExpPerSec then
+            CurMaxExpPerSec = CurMaxExpPerSec - ordMagDiff
         end
 
 
@@ -186,8 +178,8 @@ local function DrawMainWindow()
             ImPlot.SetupAxisLimits(ImAxis.Y1, 1, CurMaxExpPerSec, ImGuiCond.Always)
 
             ImPlot.PushStyleVar(ImPlotStyleVar.FillAlpha, 0.35)
-            RenderShaded("Exp", XPEvents.Exp, XPEvents.AA, multiplier)
-            RenderShaded("AA", XPEvents.AA, XPEvents.Exp, 1)
+            RenderShaded("Exp", XPEvents.Exp, XPEvents.AA)
+            RenderShaded("AA", XPEvents.AA, XPEvents.Exp)
             ImPlot.PopStyleVar()
 
             ImPlot.EndPlot()
@@ -313,21 +305,19 @@ local function GiveTime()
     end
 
     if os.clock() - LastExtentsCheck > 0.5 then
-        GoalMaxExpPerSec = 0
+        local newGoal = 0
         LastExtentsCheck = os.clock()
         for id, expData in pairs(XPEvents) do
             for idx, exp in ipairs(expData.expEvents.DataY) do
-                --if id == "Exp" then
-                --    exp = exp * multiplier
-                --end
                 -- is this entry visible?
-                local visible = expData.expEvents.DataX[idx] > os.clock() - settings.ExpSecondsToStore and
-                    expData.expEvents.DataX[idx] < os.clock()
-                if visible and exp > GoalMaxExpPerSec then
-                    GoalMaxExpPerSec = (math.ceil(exp / MaxStep) * MaxStep) * 1.25
+                local curGoal = math.ceil(exp / MaxStep * MaxStep * 1.25)
+                local visible = expData.expEvents.DataX[idx] > (os.clock() - settings.ExpSecondsToStore)
+                if visible and curGoal > newGoal then
+                    newGoal = curGoal
                 end
             end
         end
+        GoalMaxExpPerSec = newGoal
     end
 end
 
