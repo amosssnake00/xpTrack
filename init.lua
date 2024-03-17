@@ -99,18 +99,18 @@ local function RenderShaded(type, currentData, otherData)
         local count = #currentData.expEvents.DataY
         local otherY = {}
 
-        for idx, v in ipairs(currentData.expEvents.DataY) do
-            if otherData.expEvents[idx] then
-                otherY[idx] = (otherData.expEvents.DataY[idx] < currentData.expEvents.DataY[idx] and otherData.expEvents.DataY[idx] or 0)
-            else
-                otherY[idx] = 0
-            end
-        end
-
         if settings.ExpPlotFillLines then
+            for idx, v in ipairs(currentData.expEvents.DataY) do
+                if otherData.expEvents[idx] then
+                    otherY[idx] = (otherData.expEvents.DataY[idx] < currentData.expEvents.DataY[idx] and otherData.expEvents.DataY[idx] or 0)
+                else
+                    otherY[idx] = 0
+                end
+            end
             ImPlot.PlotShaded(type, currentData.expEvents.DataX, currentData.expEvents.DataY, otherY,
                 count, ImPlotShadedFlags.None)
         end
+
         ImPlot.PlotLine(type, currentData.expEvents.DataX, currentData.expEvents.DataY,
             count, ImPlotLineFlags.None)
     end
