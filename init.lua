@@ -100,19 +100,20 @@ local function RenderShaded(type, currentData, otherData)
         local otherY = {}
 
         if settings.ExpPlotFillLines then
-            for idx, v in ipairs(currentData.expEvents.DataY) do
-                if otherData.expEvents[idx] then
-                    otherY[idx] = (otherData.expEvents.DataY[idx] < currentData.expEvents.DataY[idx] and otherData.expEvents.DataY[idx] or 0)
-                else
-                    otherY[idx] = 0
+            for idx, _ in ipairs(currentData.expEvents.DataY) do
+                otherY[idx] = 0
+                if otherData.expEvents.DataY[idx] then
+                    if currentData.expEvents.DataY[idx] >= otherData.expEvents.DataY[idx] then
+                        otherY[idx] = otherData.expEvents.DataY[idx]
+                    end
                 end
             end
             ImPlot.PlotShaded(type, currentData.expEvents.DataX, currentData.expEvents.DataY, otherY,
-                count, ImPlotShadedFlags.None)
+                count, ImPlotShadedFlags.None, currentData.expEvents.Offset - 1)
         end
 
         ImPlot.PlotLine(type, currentData.expEvents.DataX, currentData.expEvents.DataY,
-            count, ImPlotLineFlags.None)
+            count, ImPlotLineFlags.None, currentData.expEvents.Offset - 1)
     end
 end
 
@@ -277,33 +278,35 @@ local function CheckAAExpChanged()
 end
 
 local function GiveTime()
+    local now = getTime()
+
     if mq.TLO.EverQuest.GameState() == "INGAME" then
         if CheckExpChanged() then
             printf("\ayXP Gained: \ag%02.3f%% \aw|| \ayXP Total: \ag%02.3f%% \aw|| \ayStart: \am%d \ayCur: \am%d \ayExp/Sec: \ag%2.3f%%",
                 TrackXP.Experience.Gained / TrackXP.XPTotalDivider,
                 TrackXP.Experience.Total / TrackXP.XPTotalDivider,
                 TrackXP.StartTime,
-                getTime(),
-                TrackXP.Experience.Total / TrackXP.XPTotalDivider / (math.floor(getTime() / Resolution) * Resolution - TrackXP.StartTime))
+                now,
+                TrackXP.Experience.Total / TrackXP.XPTotalDivider / (math.floor(now / Resolution) * Resolution - TrackXP.StartTime))
         end
 
         if not XPEvents.Exp then
             XPEvents.Exp = {
-                lastFrame = getTime(),
+                lastFrame = now,
                 expEvents =
                     ScrollingPlotBuffer:new(),
             }
         end
 
-        XPPerSecond            = (TrackXP.Experience.Total / TrackXP.XPTotalDivider) / (math.floor(getTime() / Resolution) * Resolution - TrackXP.StartTime)
+        XPPerSecond            = (TrackXP.Experience.Total / TrackXP.XPTotalDivider) / (math.floor(now / Resolution) * Resolution - TrackXP.StartTime)
         XPToNextLevel          = TrackXP.XPTotalPerLevel - mq.TLO.Me.Exp()
-        AAXPPerSecond          = ((TrackXP.AAExperience.Total / TrackXP.XPTotalDivider) / (math.floor(getTime() / Resolution) * Resolution - TrackXP.StartTime)) / 100
+        AAXPPerSecond          = ((TrackXP.AAExperience.Total / TrackXP.XPTotalDivider) / (math.floor(now / Resolution) * Resolution - TrackXP.StartTime)) / 100
         SecondsToLevel         = XPToNextLevel / (XPPerSecond * TrackXP.XPTotalDivider)
         TimeToLevel            = XPPerSecond <= 0 and "<Unknown>" or FormatTime(SecondsToLevel, "%d Days %d Hours %d Mins")
 
-        XPEvents.Exp.lastFrame = getTime()
+        XPEvents.Exp.lastFrame = now
         ---@diagnostic disable-next-line: undefined-field
-        XPEvents.Exp.expEvents:AddPoint(getTime(), XPPerSecond * 60 * 60 * multiplier)
+        XPEvents.Exp.expEvents:AddPoint(now, XPPerSecond * 60 * 60 * multiplier)
 
         if mq.TLO.Me.PctAAExp() > 0 and CheckAAExpChanged() then
             printf("\ayAA Gained: \ag%2.2f \aw|| \ayAA Total: \ag%2.2f", TrackXP.AAExperience.Gained / TrackXP.XPTotalDivider / 100,
@@ -312,25 +315,25 @@ local function GiveTime()
 
         if not XPEvents.AA then
             XPEvents.AA = {
-                lastFrame = getTime(),
+                lastFrame = now,
                 expEvents =
                     ScrollingPlotBuffer:new(),
             }
         end
 
-        XPEvents.AA.lastFrame = getTime()
+        XPEvents.AA.lastFrame = now
         ---@diagnostic disable-next-line: undefined-field
-        XPEvents.AA.expEvents:AddPoint(getTime(), AAXPPerSecond * 60 * 60)
+        XPEvents.AA.expEvents:AddPoint(now, AAXPPerSecond * 60 * 60)
     end
 
-    if getTime() - LastExtentsCheck > 0.5 then
+    if now - LastExtentsCheck > 0.5 then
         local newGoal = 0
-        LastExtentsCheck = getTime()
+        LastExtentsCheck = now
         for id, expData in pairs(XPEvents) do
             for idx, exp in ipairs(expData.expEvents.DataY) do
                 -- is this entry visible?
                 local curGoal = math.ceil(exp / MaxStep * MaxStep * 1.25)
-                local visible = expData.expEvents.DataX[idx] > (getTime() - settings.ExpSecondsToStore)
+                local visible = expData.expEvents.DataX[idx] > (now - settings.ExpSecondsToStore)
                 if visible and curGoal > newGoal then
                     newGoal = curGoal
                 end
