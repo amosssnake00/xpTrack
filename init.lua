@@ -1,5 +1,5 @@
 -- Sample Performance Monitor Class Module
--- shamelessly ripped from RGMercs Lua 
+-- shamelessly ripped from RGMercs Lua
 -- as suggested by Derple
 
 -- initial version
@@ -10,18 +10,18 @@ local ImPlot              = require('ImPlot')
 local Set                 = require('mq.Set')
 local ScrollingPlotBuffer = require('utils.scrolling_plot_buffer')
 
-local XPEvents           = {}
-local MaxStep            = 50
-local GoalMaxExpPerSec   = 0
-local CurMaxExpPerSec    = 0
-local LastExtentsCheck   = os.clock()
-local XPPerSecond        = 0
-local XPToNextLevel      = 0
-local SecondsToLevel     = 0
-local TimeToLevel        = "<Unknown>"
-local Resolution         = 15 -- seconds 
+local XPEvents            = {}
+local MaxStep             = 50
+local GoalMaxExpPerSec    = 0
+local CurMaxExpPerSec     = 0
+local LastExtentsCheck    = 0
+local XPPerSecond         = 0
+local XPToNextLevel       = 0
+local SecondsToLevel      = 0
+local TimeToLevel         = "<Unknown>"
+local Resolution          = 15 -- seconds
 
-local TrackXP            = {
+local TrackXP             = {
     PlayerLevel = mq.TLO.Me.Level(),
     PlayerAA = mq.TLO.Me.AAPointsTotal(),
     StartTime = os.clock(),
@@ -49,12 +49,9 @@ local DefaultConfig       = {
     ['GraphMultiplier']   = 1,
 }
 
+settings                  = DefaultConfig
 
-settings = DefaultConfig
-
-
-
-local multiplier = tonumber(settings.GraphMultiplier)
+local multiplier          = tonumber(settings.GraphMultiplier)
 
 local function ClearStats()
     TrackXP = {
@@ -81,41 +78,25 @@ local function ClearStats()
 end
 
 
-local function RenderShaded(type, currentData, otherData, multiplier)
+local function RenderShaded(type, currentData, otherData)
     if currentData then
-        local offset = currentData.expEvents.Offset - 1
         local count = #currentData.expEvents.DataY
+        local otherY = {}
+
+        for idx, v in ipairs(currentData.expEvents.DataY) do
+            if otherData.expEvents[idx] then
+                otherY[idx] = (otherData.expEvents.DataY[idx] < currentData.expEvents.DataY[idx] and otherData.expEvents.DataY[idx] or 0)
+            else
+                otherY[idx] = 0
+            end
+        end
 
         if settings.ExpPlotFillLines then
-            ImPlot.PlotShaded(type,
-                function(n)
-                    local pos = ((offset + n) % count) + 1
-                    return ImPlotPoint(currentData.expEvents.DataX[pos], currentData.expEvents.DataY[pos] * multiplier)
-                end,
-                function(n)
-                    local pos = ((offset + n) % count) + 1
-                    local lowerBound = 0
-                    if otherData and otherData.expEvents and otherData.expEvents.DataY[pos] and otherData.expEvents.DataY[pos] < currentData.expEvents.DataY[pos] then
-                        lowerBound = otherData.expEvents.DataY[pos] 
-                    end
-                    return ImPlotPoint(currentData.expEvents.DataX[pos], lowerBound)
-                end,
-                count,
-                ImPlotShadedFlags.None)
+            ImPlot.PlotShaded(type, currentData.expEvents.DataX, currentData.expEvents.DataY, otherY,
+                count, ImPlotShadedFlags.None)
         end
-        ImPlot.PlotLine(type,
-            ---@diagnostic disable-next-line: param-type-mismatch
-            function(n)
-                local pos = ((offset + n) % count) + 1
-
-                if currentData.expEvents.DataY[pos] == nil then
-                    return ImPlotPoint(0, 0)
-                end
-
-                return ImPlotPoint(currentData.expEvents.DataX[pos], currentData.expEvents.DataY[pos] * multiplier)
-            end,
-            count,
-            ImPlotLineFlags.None)
+        ImPlot.PlotLine(type, currentData.expEvents.DataX, currentData.expEvents.DataY,
+            count, ImPlotLineFlags.None)
     end
 end
 
@@ -131,12 +112,10 @@ local function FormatTime(time, formatString)
 end
 
 local function DrawMainWindow()
-
     if not openGUI then return end
     openGUI, shouldDrawGUI = ImGui.Begin('xpTrack', openGUI)
-   
+
     if shouldDrawGUI then
-            
         ImGui.SameLine()
         local pressed
         if ImGui.Button("Reset Stats", ImGui.GetWindowWidth() * .3, 25) then
@@ -172,21 +151,20 @@ local function DrawMainWindow()
             ImGui.Text("AA / Hr")
             ImGui.TableNextColumn()
             -- "Resolution" sec intervals, only count full AAs
-            ImGui.Text(string.format("%2.2f", ((TrackXP.AAExperience.Total / TrackXP.XPTotalDivider) / (math.floor(os.clock()/Resolution)*Resolution - TrackXP.StartTime)) * 60 * 60 / 100))
+            ImGui.Text(string.format("%2.2f",
+                ((TrackXP.AAExperience.Total / TrackXP.XPTotalDivider) / (math.floor(os.clock() / Resolution) * Resolution - TrackXP.StartTime)) * 60 * 60 / 100))
             ImGui.EndTable()
         end
 
-
+        local ordMagDiff = 10 ^ math.floor(math.abs(math.log((CurMaxExpPerSec > 0 and CurMaxExpPerSec or 1) / (GoalMaxExpPerSec > 0 and GoalMaxExpPerSec or 1), 10)))
 
         -- converge on new max recalc min and maxes
-
-        if CurMaxExpPerSec + 100 < GoalMaxExpPerSec then CurMaxExpPerSec = CurMaxExpPerSec + 100 
-        elseif CurMaxExpPerSec + 10 < GoalMaxExpPerSec then CurMaxExpPerSec = CurMaxExpPerSec + 10 
-        elseif CurMaxExpPerSec < GoalMaxExpPerSec then CurMaxExpPerSec = CurMaxExpPerSec + 1 
+        if CurMaxExpPerSec < GoalMaxExpPerSec then
+            CurMaxExpPerSec = CurMaxExpPerSec + ordMagDiff
         end
-        if CurMaxExpPerSec - 100 > GoalMaxExpPerSec then CurMaxExpPerSec = CurMaxExpPerSec - 100 
-        elseif CurMaxExpPerSec - 10 > GoalMaxExpPerSec  then CurMaxExpPerSec = CurMaxExpPerSec - 10 
-        elseif CurMaxExpPerSec > GoalMaxExpPerSec then CurMaxExpPerSec = CurMaxExpPerSec - 1 
+
+        if CurMaxExpPerSec > GoalMaxExpPerSec then
+            CurMaxExpPerSec = CurMaxExpPerSec - ordMagDiff
         end
 
 
@@ -200,27 +178,34 @@ local function DrawMainWindow()
             ImPlot.SetupAxisLimits(ImAxis.Y1, 1, CurMaxExpPerSec, ImGuiCond.Always)
 
             ImPlot.PushStyleVar(ImPlotStyleVar.FillAlpha, 0.35)
-            RenderShaded("Exp", XPEvents.Exp, XPEvents.AA, multiplier)
-            RenderShaded("AA", XPEvents.AA, XPEvents.Exp, 1)
+            RenderShaded("Exp", XPEvents.Exp, XPEvents.AA)
+            RenderShaded("AA", XPEvents.AA, XPEvents.Exp)
             ImPlot.PopStyleVar()
 
             ImPlot.EndPlot()
         end
         if ImGui.CollapsingHeader("Config Options") then
             settings.ExpSecondsToStore, pressed = ImGui.SliderInt("Exp observation period",
-                settings.ExpSecondsToStore, 60, 3600,"%d s")
-         
+                settings.ExpSecondsToStore, 60, 3600, "%d s")
+
             settings.GraphMultiplier, pressed = ImGui.SliderInt("Scaleup for regular XP",
-                settings.GraphMultiplier, 1, 20,"%d x")
+                settings.GraphMultiplier, 1, 20, "%d x")
             if pressed then
-                if settings.GraphMultiplier < 5 then 
-                    settings.GraphMultiplier = 1 
-                elseif settings.GraphMultiplier < 15 then 
-                    settings.GraphMultiplier = 10 
-                else 
-                    settings.GraphMultiplier = 20 
+                if settings.GraphMultiplier < 5 then
+                    settings.GraphMultiplier = 1
+                elseif settings.GraphMultiplier < 15 then
+                    settings.GraphMultiplier = 10
+                else
+                    settings.GraphMultiplier = 20
                 end
-                multiplier = tonumber(settings.GraphMultiplier)
+
+                local new_multiplier = tonumber(settings.GraphMultiplier)
+
+                for idx, pt in ipairs(XPEvents.Exp.expEvents.DataY) do
+                    XPEvents.Exp.expEvents.DataY[idx] = (pt / multiplier) * new_multiplier
+                end
+
+                multiplier = new_multiplier
             end
         end
     end
@@ -280,7 +265,7 @@ local function GiveTime()
                 TrackXP.Experience.Total / TrackXP.XPTotalDivider,
                 TrackXP.StartTime,
                 os.clock(),
-                TrackXP.Experience.Total / TrackXP.XPTotalDivider / (math.floor(os.clock()/Resolution)*Resolution - TrackXP.StartTime))
+                TrackXP.Experience.Total / TrackXP.XPTotalDivider / (math.floor(os.clock() / Resolution) * Resolution - TrackXP.StartTime))
         end
 
         if not XPEvents.Exp then
@@ -291,18 +276,15 @@ local function GiveTime()
             }
         end
 
-        
-
-        XPPerSecond    = (TrackXP.Experience.Total / TrackXP.XPTotalDivider) / (math.floor(os.clock()/Resolution)*Resolution - TrackXP.StartTime)
-        XPToNextLevel  = TrackXP.XPTotalPerLevel - mq.TLO.Me.Exp()
-        AAXPPerSecond  = ((TrackXP.AAExperience.Total / TrackXP.XPTotalDivider) / (math.floor(os.clock()/Resolution)*Resolution - TrackXP.StartTime)) / 100
-        SecondsToLevel = XPToNextLevel / (XPPerSecond * TrackXP.XPTotalDivider)
-        TimeToLevel    = XPPerSecond <= 0 and "<Unknown>" or FormatTime(SecondsToLevel, "%d Days %d Hours %d Mins")
+        XPPerSecond            = (TrackXP.Experience.Total / TrackXP.XPTotalDivider) / (math.floor(os.clock() / Resolution) * Resolution - TrackXP.StartTime)
+        XPToNextLevel          = TrackXP.XPTotalPerLevel - mq.TLO.Me.Exp()
+        AAXPPerSecond          = ((TrackXP.AAExperience.Total / TrackXP.XPTotalDivider) / (math.floor(os.clock() / Resolution) * Resolution - TrackXP.StartTime)) / 100
+        SecondsToLevel         = XPToNextLevel / (XPPerSecond * TrackXP.XPTotalDivider)
+        TimeToLevel            = XPPerSecond <= 0 and "<Unknown>" or FormatTime(SecondsToLevel, "%d Days %d Hours %d Mins")
 
         XPEvents.Exp.lastFrame = os.clock()
         ---@diagnostic disable-next-line: undefined-field
-        XPEvents.Exp.expEvents:AddPoint(os.clock(), XPPerSecond * 60 * 60)
-
+        XPEvents.Exp.expEvents:AddPoint(os.clock(), XPPerSecond * 60 * 60 * multiplier)
 
         if mq.TLO.Me.PctAAExp() > 0 and CheckAAExpChanged() then
             printf("\ayAA Gained: \ag%2.2f \aw|| \ayAA Total: \ag%2.2f", TrackXP.AAExperience.Gained / TrackXP.XPTotalDivider / 100,
@@ -320,25 +302,22 @@ local function GiveTime()
         XPEvents.AA.lastFrame = os.clock()
         ---@diagnostic disable-next-line: undefined-field
         XPEvents.AA.expEvents:AddPoint(os.clock(), AAXPPerSecond * 60 * 60)
-        
     end
 
     if os.clock() - LastExtentsCheck > 0.5 then
-        GoalMaxExpPerSec = 0
+        local newGoal = 0
         LastExtentsCheck = os.clock()
         for id, expData in pairs(XPEvents) do
             for idx, exp in ipairs(expData.expEvents.DataY) do
-                if id == "Exp" then 
-                    exp = exp * multiplier 
-                end
                 -- is this entry visible?
-                local visible = expData.expEvents.DataX[idx] > os.clock() - settings.ExpSecondsToStore and
-                    expData.expEvents.DataX[idx] < os.clock()
-                if visible and exp > GoalMaxExpPerSec then
-                    GoalMaxExpPerSec = (math.ceil(exp / MaxStep) * MaxStep) * 1.25
+                local curGoal = math.ceil(exp / MaxStep * MaxStep * 1.25)
+                local visible = expData.expEvents.DataX[idx] > (os.clock() - settings.ExpSecondsToStore)
+                if visible and curGoal > newGoal then
+                    newGoal = curGoal
                 end
             end
         end
+        GoalMaxExpPerSec = newGoal
     end
 end
 
