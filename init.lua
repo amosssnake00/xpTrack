@@ -4,30 +4,42 @@
 
 -- initial version
 
-local mq                  = require('mq')
-local ImGui               = require('ImGui')
-local ImPlot              = require('ImPlot')
-local Set                 = require('mq.Set')
-local ScrollingPlotBuffer = require('utils.scrolling_plot_buffer')
+local mq                   = require('mq')
+local ImGui                = require('ImGui')
+local ImPlot               = require('ImPlot')
+local ScrollingPlotBuffer  = require('utils.scrolling_plot_buffer')
 
-local XPEvents            = {}
-local MaxStep             = 50
-local GoalMaxExpPerSec    = 0
-local CurMaxExpPerSec     = 0
-local LastExtentsCheck    = 0
-local XPPerSecond         = 0
-local XPToNextLevel       = 0
-local SecondsToLevel      = 0
-local TimeToLevel         = "<Unknown>"
-local Resolution          = 15 -- seconds
+local XPEvents             = {}
+local MaxStep              = 50
+local GoalMaxExpPerSec     = 0
+local CurMaxExpPerSec      = 0
+local LastExtentsCheck     = 0
+local LastEntry            = 0
+local XPPerSecond          = 0
+local PrevXPTotal          = 0
+local PrevAATotal          = 0
+
+local XPToNextLevel        = 0
+local SecondsToLevel       = 0
+local TimeToLevel          = "<Unknown>"
+local Resolution           = 5 -- seconds
+local MaxExpSecondsToStore = 3600
+local MaxHorizon           = 3600
+local MinTime              = 60
+
+local offset               = 1
+local horizon_or_less      = 900
+local trackback            = 1
+local first_tick           = 0
+
 
 -- timezone calcs
-local utc_now             = os.time(os.date("!*t", os.time()))
-local local_now           = os.time(os.date("*t", os.time()))
-local utc_offset          = local_now - utc_now
+local utc_now    = os.time(os.date("!*t", os.time()))
+local local_now  = os.time(os.date("*t", os.time()))
+local utc_offset = local_now - utc_now
 
 -- Check if we're currently in daylight saving time
-local dst                 = os.date("*t", os.time())["isdst"]
+local dst        = os.date("*t", os.time())["isdst"]
 
 -- If we're in DST, add one hour
 if dst then
@@ -59,9 +71,11 @@ local TrackXP       = {
 }
 
 local settings      = {}
+HorizonChanged      = false --
 
 local DefaultConfig = {
     ['ExpSecondsToStore'] = 1800,
+    ['Horizon']           = 15 * 60,
     ['ExpPlotFillLines']  = true,
     ['GraphMultiplier']   = 1,
 }
@@ -98,7 +112,7 @@ local function RenderShaded(type, currentData, otherData)
     if currentData then
         local count = #currentData.expEvents.DataY
         local otherY = {}
-
+        local now = getTime()
         if settings.ExpPlotFillLines then
             for idx, _ in ipairs(currentData.expEvents.DataY) do
                 otherY[idx] = 0
@@ -108,12 +122,12 @@ local function RenderShaded(type, currentData, otherData)
                     end
                 end
             end
-            ImPlot.PlotShaded(type, currentData.expEvents.DataX, currentData.expEvents.DataY, otherY,
-                count, ImPlotShadedFlags.None, currentData.expEvents.Offset - 1)
+            ImPlot.PlotShaded(type, currentData.expEvents.DataX, currentData.expEvents.DataY, otherY, count,
+                ImPlotShadedFlags.None, currentData.expEvents.Offset - 1)
         end
 
-        ImPlot.PlotLine(type, currentData.expEvents.DataX, currentData.expEvents.DataY,
-            count, ImPlotLineFlags.None, currentData.expEvents.Offset - 1)
+        ImPlot.PlotLine(type, currentData.expEvents.DataX, currentData.expEvents.DataY, count, ImPlotLineFlags.None,
+            currentData.expEvents.Offset - 1)
     end
 end
 
@@ -140,40 +154,52 @@ local function DrawMainWindow()
         end
 
         if ImGui.BeginTable("ExpStats", 2, bit32.bor(ImGuiTableFlags.Borders)) then
-            ImGui.TableNextColumn()
-            ImGui.Text("Exp Session Time")
-            ImGui.TableNextColumn()
-            ImGui.Text(FormatTime(getTime() - TrackXP.StartTime))
-            ImGui.TableNextColumn()
-            ImGui.Text("Exp Gained")
-            ImGui.TableNextColumn()
-            ImGui.Text(string.format("%2.3f%%", TrackXP.Experience.Total / TrackXP.XPTotalDivider))
-            ImGui.TableNextColumn()
-            ImGui.Text("AA Gained")
-            ImGui.TableNextColumn()
-            ImGui.Text(string.format("%2.2f", TrackXP.AAExperience.Total / TrackXP.XPTotalDivider / 100))
-            ImGui.TableNextColumn()
-            ImGui.Text("Exp / Min")
-            ImGui.TableNextColumn()
-            ImGui.Text(string.format("%2.3f%%", XPPerSecond * 60))
-            ImGui.TableNextColumn()
-            ImGui.Text("Exp / Hr")
-            ImGui.TableNextColumn()
-            ImGui.Text(string.format("%2.3f%%", XPPerSecond * 3600))
-            ImGui.TableNextColumn()
-            ImGui.Text("Time To Level")
-            ImGui.TableNextColumn()
-            ImGui.Text(string.format("%s", TimeToLevel))
-            ImGui.TableNextColumn()
-            ImGui.Text("AA / Hr")
-            ImGui.TableNextColumn()
-            -- "Resolution" sec intervals, only count full AAs
-            ImGui.Text(string.format("%2.2f",
-                ((TrackXP.AAExperience.Total / TrackXP.XPTotalDivider) / (math.floor(getTime() / Resolution) * Resolution - TrackXP.StartTime)) * 60 * 60 / 100))
+            if getTime() - TrackXP.StartTime > MinTime then
+                -- wait for MinTime
+                ImGui.TableNextColumn()
+                ImGui.Text("Exp Session Time")
+                ImGui.TableNextColumn()
+                ImGui.Text(FormatTime(getTime() - TrackXP.StartTime))
+                ImGui.TableNextColumn()
+                ImGui.Text("Exp Horizon Time")
+                ImGui.TableNextColumn()
+                ImGui.Text(FormatTime(settings.Horizon))
+                ImGui.TableNextColumn()
+                ImGui.Text("Exp Gained")
+                ImGui.TableNextColumn()
+                ImGui.Text(string.format("%2.3f%%", TrackXP.Experience.Total / TrackXP.XPTotalDivider))
+                ImGui.TableNextColumn()
+                ImGui.Text("AA Gained")
+                ImGui.TableNextColumn()
+                ImGui.Text(string.format("%2.2f", TrackXP.AAExperience.Total / TrackXP.XPTotalDivider / 100))
+                ImGui.TableNextColumn()
+                ImGui.Text("current Exp / Min")
+                ImGui.TableNextColumn()
+                ImGui.Text(string.format("%2.3f%%", XPPerSecond * 60))
+                ImGui.TableNextColumn()
+                ImGui.Text("current Exp / Hr")
+                ImGui.TableNextColumn()
+                ImGui.Text(string.format("%2.3f%%", XPPerSecond * 3600))
+                ImGui.TableNextColumn()
+                ImGui.Text("Time To Level")
+                ImGui.TableNextColumn()
+                ImGui.Text(string.format("%s", TimeToLevel))
+                ImGui.TableNextColumn()
+                ImGui.Text("current AA / Hr")
+                ImGui.TableNextColumn()
+                ImGui.Text(string.format("%2.2f",AAXPPerSecond * 60 * 60))
+            else
+                ImGui.TableNextColumn()
+                ImGui.Text("waiting for data...")
+                ImGui.TableNextColumn()
+                ImGui.Text(string.format("%s", MinTime - (getTime() - TrackXP.StartTime)))
+            end
             ImGui.EndTable()
         end
 
-        local ordMagDiff = 10 ^ math.floor(math.abs(math.log((CurMaxExpPerSec > 0 and CurMaxExpPerSec or 1) / (GoalMaxExpPerSec > 0 and GoalMaxExpPerSec or 1), 10)))
+        local ordMagDiff = 10 ^
+            math.floor(math.abs(math.log(
+                (CurMaxExpPerSec > 0 and CurMaxExpPerSec or 1) / (GoalMaxExpPerSec > 0 and GoalMaxExpPerSec or 1), 10)))
 
         -- converge on new max recalc min and maxes
         if CurMaxExpPerSec < GoalMaxExpPerSec then
@@ -184,27 +210,28 @@ local function DrawMainWindow()
             CurMaxExpPerSec = CurMaxExpPerSec - ordMagDiff
         end
 
+        if ImGui.CollapsingHeader("XP Plot") then
+            if ImPlot.BeginPlot("Experience Tracker") then
+                ImPlot.SetupAxisScale(ImAxis.X1, ImPlotScale.Time)
+                if multiplier == 1 then
+                    ImPlot.SetupAxes("Local Time", "Exp ")
+                else
+                    ImPlot.SetupAxes("Local Time", string.format("reg. Exp in %sths", multiplier))
+                end
+                ImPlot.SetupAxisLimits(ImAxis.X1, getTime() - settings.ExpSecondsToStore, getTime(), ImGuiCond.Always)
+                ImPlot.SetupAxisLimits(ImAxis.Y1, 1, CurMaxExpPerSec, ImGuiCond.Always)
 
-        if ImPlot.BeginPlot("Experience Tracker") then
-            ImPlot.SetupAxisScale(ImAxis.X1, ImPlotScale.Time)
-            if multiplier == 1 then
-                ImPlot.SetupAxes("Local Time", "Exp ")
-            else
-                ImPlot.SetupAxes("Local Time", string.format("reg. Exp in %sths", multiplier))
+                ImPlot.PushStyleVar(ImPlotStyleVar.FillAlpha, 0.35)
+                RenderShaded("Exp", XPEvents.Exp, XPEvents.AA)
+                RenderShaded("AA", XPEvents.AA, XPEvents.Exp)
+                ImPlot.PopStyleVar()
+
+                ImPlot.EndPlot()
             end
-            ImPlot.SetupAxisLimits(ImAxis.X1, getTime() - settings.ExpSecondsToStore, getTime(), ImGuiCond.Always)
-            ImPlot.SetupAxisLimits(ImAxis.Y1, 1, CurMaxExpPerSec, ImGuiCond.Always)
-
-            ImPlot.PushStyleVar(ImPlotStyleVar.FillAlpha, 0.35)
-            RenderShaded("Exp", XPEvents.Exp, XPEvents.AA)
-            RenderShaded("AA", XPEvents.AA, XPEvents.Exp)
-            ImPlot.PopStyleVar()
-
-            ImPlot.EndPlot()
         end
         if ImGui.CollapsingHeader("Config Options") then
             settings.ExpSecondsToStore, pressed = ImGui.SliderInt("Exp observation period",
-                settings.ExpSecondsToStore, 60, 3600, "%d s")
+                settings.ExpSecondsToStore, 60, MaxExpSecondsToStore, "%d s")
 
             settings.GraphMultiplier, pressed = ImGui.SliderInt("Scaleup for regular XP",
                 settings.GraphMultiplier, 1, 20, "%d x")
@@ -224,6 +251,24 @@ local function DrawMainWindow()
                 end
 
                 multiplier = new_multiplier
+            end
+
+            settings.Horizon, pressed = ImGui.SliderInt("Horizon for plot",
+                settings.Horizon, 60, MaxHorizon, "%d s")
+            if pressed then
+                if settings.Horizon < 7 * 60 then
+                    settings.Horizon = 5 * 60
+                    HorizonChanged = true
+                elseif settings.Horizon < 20 * 60 then
+                    settings.Horizon = 10 * 60
+                    HorizonChanged = true
+                elseif settings.Horizon < 45 * 60 then
+                    settings.Horizon = 30 * 60
+                    HorizonChanged = true
+                else
+                    settings.Horizon = 60 * 60
+                    HorizonChanged = true
+                end
             end
 
             settings.ExpPlotFillLines = ImGui.Checkbox("Shade Plot Lines", settings.ExpPlotFillLines)
@@ -263,7 +308,8 @@ local function CheckAAExpChanged()
         if me.AAPointsTotal() == TrackXP.PlayerAA then
             TrackXP.AAExperience.Gained = currentExp - TrackXP.AAExperience.Base
         else
-            TrackXP.AAExperience.Gained = currentExp - TrackXP.AAExperience.Base + ((me.AAPointsTotal() - TrackXP.PlayerAA) * TrackXP.XPTotalPerLevel)
+            TrackXP.AAExperience.Gained = currentExp - TrackXP.AAExperience.Base +
+                ((me.AAPointsTotal() - TrackXP.PlayerAA) * TrackXP.XPTotalPerLevel)
         end
 
         TrackXP.AAExperience.Total = TrackXP.AAExperience.Total + TrackXP.AAExperience.Gained
@@ -278,74 +324,134 @@ local function CheckAAExpChanged()
 end
 
 local function GiveTime()
-    local now = getTime()
+    local now = math.floor(getTime())
 
     if mq.TLO.EverQuest.GameState() == "INGAME" then
         if CheckExpChanged() then
-            printf("\ayXP Gained: \ag%02.3f%% \aw|| \ayXP Total: \ag%02.3f%% \aw|| \ayStart: \am%d \ayCur: \am%d \ayExp/Sec: \ag%2.3f%%",
+            printf(
+                "\ayXP Gained: \ag%02.3f%% \aw|| \ayXP Total: \ag%02.3f%% \aw|| \ayStart: \am%d \ayCur: \am%d \ayExp/Sec: \ag%2.3f%%",
                 TrackXP.Experience.Gained / TrackXP.XPTotalDivider,
                 TrackXP.Experience.Total / TrackXP.XPTotalDivider,
                 TrackXP.StartTime,
                 now,
-                TrackXP.Experience.Total / TrackXP.XPTotalDivider / (math.floor(now / Resolution) * Resolution - TrackXP.StartTime))
+                TrackXP.Experience.Total / TrackXP.XPTotalDivider /
+                (math.floor(now / Resolution) * Resolution - TrackXP.StartTime))
+        end
+
+        if mq.TLO.Me.PctAAExp() > 0 and CheckAAExpChanged() then
+            printf("\ayAA Gained: \ag%2.2f \aw|| \ayAA Total: \ag%2.2f",
+                TrackXP.AAExperience.Gained / TrackXP.XPTotalDivider / 100,
+                TrackXP.AAExperience.Total / TrackXP.XPTotalDivider / 100)
         end
 
         if not XPEvents.Exp then
             XPEvents.Exp = {
                 lastFrame = now,
                 expEvents =
-                    ScrollingPlotBuffer:new(),
+                    ScrollingPlotBuffer:new(math.ceil(MaxHorizon / Resolution)),
             }
-        end
-
-        XPPerSecond            = (TrackXP.Experience.Total / TrackXP.XPTotalDivider) / (math.floor(now / Resolution) * Resolution - TrackXP.StartTime)
-        XPToNextLevel          = TrackXP.XPTotalPerLevel - mq.TLO.Me.Exp()
-        AAXPPerSecond          = ((TrackXP.AAExperience.Total / TrackXP.XPTotalDivider) / (math.floor(now / Resolution) * Resolution - TrackXP.StartTime)) / 100
-        SecondsToLevel         = XPToNextLevel / (XPPerSecond * TrackXP.XPTotalDivider)
-        TimeToLevel            = XPPerSecond <= 0 and "<Unknown>" or FormatTime(SecondsToLevel, "%d Days %d Hours %d Mins")
-
-        XPEvents.Exp.lastFrame = now
-        ---@diagnostic disable-next-line: undefined-field
-        XPEvents.Exp.expEvents:AddPoint(now, XPPerSecond * 60 * 60 * multiplier)
-
-        if mq.TLO.Me.PctAAExp() > 0 and CheckAAExpChanged() then
-            printf("\ayAA Gained: \ag%2.2f \aw|| \ayAA Total: \ag%2.2f", TrackXP.AAExperience.Gained / TrackXP.XPTotalDivider / 100,
-                TrackXP.AAExperience.Total / TrackXP.XPTotalDivider / 100)
         end
 
         if not XPEvents.AA then
             XPEvents.AA = {
                 lastFrame = now,
                 expEvents =
-                    ScrollingPlotBuffer:new(),
+                    ScrollingPlotBuffer:new(math.ceil(MaxHorizon / Resolution)),
             }
         end
+    end
+
+    if mq.TLO.EverQuest.GameState() == "INGAME" and now > LastEntry and (getTime() % Resolution) == 0 then
+        LastEntry = now
+        if first_tick == 0 then first_tick = now end
+        offset = XPEvents.Exp.expEvents.Offset
+        horizon_or_less = math.min(settings.Horizon, now - first_tick)
+        trackback = math.max(1, (#XPEvents.Exp.expEvents.TotalXP - (offset - 1)) - (horizon_or_less / Resolution))
+
+        if XPEvents.Exp.expEvents.TotalXP[trackback] then
+            PrevXPTotal = XPEvents.Exp.expEvents.TotalXP[trackback]
+        else
+            PrevXPTotal = TrackXP.Experience.Total
+        end
+        if XPEvents.AA.expEvents.TotalXP[trackback] then
+            PrevAATotal = XPEvents.AA.expEvents.TotalXP[trackback]
+        else
+            PrevAATotal = TrackXP.AAExperience.Total
+        end
+
+        XPPerSecond    = ((TrackXP.Experience.Total - PrevXPTotal) / TrackXP.XPTotalDivider) / horizon_or_less
+        XPToNextLevel  = TrackXP.XPTotalPerLevel - mq.TLO.Me.Exp()
+        AAXPPerSecond  = (((TrackXP.AAExperience.Total - PrevAATotal) / TrackXP.XPTotalDivider) / horizon_or_less) /
+        100                                                                                                          -- divide by 100 to get full AA, not % values
+        SecondsToLevel = XPToNextLevel / (XPPerSecond * TrackXP.XPTotalDivider)
+        TimeToLevel    = XPPerSecond <= 0 and "<Unknown>" or FormatTime(SecondsToLevel, "%d Days %d Hours %d Mins")
+
+
+
+        XPEvents.Exp.lastFrame = now
+        ---@diagnostic disable-next-line: undefined-field
+        XPEvents.Exp.expEvents:AddPoint(now, XPPerSecond * 60 * 60 * multiplier, TrackXP.Experience.Total)
+
 
         XPEvents.AA.lastFrame = now
         ---@diagnostic disable-next-line: undefined-field
-        XPEvents.AA.expEvents:AddPoint(now, AAXPPerSecond * 60 * 60)
+        XPEvents.AA.expEvents:AddPoint(now, AAXPPerSecond * 60 * 60, TrackXP.AAExperience.Total)
     end
 
     if now - LastExtentsCheck > 0.5 then
         local newGoal = 0
+        local rolled = (#XPEvents.Exp.expEvents.TotalXP == math.ceil(MaxHorizon / Resolution))
+        local div = 1
+        local multiplier2 = multiplier
+        local horizon = settings.Horizon 
+        local horizon_ticks = (horizon / Resolution) -- figure out how many full ticks we have to go back
+ 
+        local horizonChanged = HorizonChanged
+
         LastExtentsCheck = now
         for id, expData in pairs(XPEvents) do
+
+            
+            if id == "AA" then 
+                div = 100 
+                multiplier2 = 1
+            else 
+                div = 1
+                multiplier2 = multiplier
+            end
             for idx, exp in ipairs(expData.expEvents.DataY) do
                 -- is this entry visible?
                 local curGoal = math.ceil(exp / MaxStep * MaxStep * 1.25)
-                local visible = expData.expEvents.DataX[idx] > (now - settings.ExpSecondsToStore)
-                if visible and curGoal > newGoal then
-                    newGoal = curGoal
+                local visible = expData.expEvents.DataX[idx] > (now - settings.ExpSecondsToStore) / Resolution
+
+                if visible then
+                    if curGoal > newGoal then
+                        newGoal = curGoal
+                    end
+                    if horizonChanged then
+                        if rolled then -- we're full, just go round
+                            expData.expEvents.DataY[idx] = ((((expData.expEvents.TotalXP[idx] - expData.expEvents.TotalXP[offset - 1 + idx - horizon_ticks]) / TrackXP.XPTotalDivider) / horizon) /
+                                div) * 60 * 60 * multiplier2
+                        elseif idx > horizon_ticks then -- can go back at least one horizon_ticks before hitting start
+                            expData.expEvents.DataY[idx] = ((((expData.expEvents.TotalXP[idx] - expData.expEvents.TotalXP[idx - horizon_ticks]) / TrackXP.XPTotalDivider) / horizon) /
+                                div) * 60 * 60 * multiplier2
+                        else -- not a full horizon tick yet, take partials
+                            expData.expEvents.DataY[idx] = ((((expData.expEvents.TotalXP[idx] - expData.expEvents.TotalXP[1]) / TrackXP.XPTotalDivider) / (idx * Resolution)) /
+                                div) * 60 * 60 * multiplier2
+                        end
+                    end
                 end
             end
         end
         GoalMaxExpPerSec = newGoal
+        HorizonChanged = false
     end
 end
 
-mq.imgui.init('xptracker', DrawMainWindow)
+-- check for persona / other char switch and reset stats?
 
+mq.imgui.init('xptracker', DrawMainWindow)
 while openGUI do
-    mq.delay(1000)
     GiveTime()
+    mq.delay(100)
 end
