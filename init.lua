@@ -187,7 +187,7 @@ local function DrawMainWindow()
                 ImGui.TableNextColumn()
                 ImGui.Text("current AA / Hr")
                 ImGui.TableNextColumn()
-                ImGui.Text(string.format("%2.2f",AAXPPerSecond * 60 * 60))
+                ImGui.Text(string.format("%2.2f", AAXPPerSecond * 60 * 60))
             else
                 ImGui.TableNextColumn()
                 ImGui.Text("waiting for data...")
@@ -254,7 +254,7 @@ local function DrawMainWindow()
             end
 
             settings.Horizon, pressed = ImGui.SliderInt("Horizon for plot",
-                settings.Horizon, 60, MaxHorizon, "%d s")
+                settings.Horizon, 5 * 60, MaxHorizon, "%d s")
             if pressed then
                 if settings.Horizon < 7 * 60 then
                     settings.Horizon = 5 * 60
@@ -382,7 +382,7 @@ local function GiveTime()
         XPPerSecond    = ((TrackXP.Experience.Total - PrevXPTotal) / TrackXP.XPTotalDivider) / horizon_or_less
         XPToNextLevel  = TrackXP.XPTotalPerLevel - mq.TLO.Me.Exp()
         AAXPPerSecond  = (((TrackXP.AAExperience.Total - PrevAATotal) / TrackXP.XPTotalDivider) / horizon_or_less) /
-        100                                                                                                          -- divide by 100 to get full AA, not % values
+            100 -- divide by 100 to get full AA, not % values
         SecondsToLevel = XPToNextLevel / (XPPerSecond * TrackXP.XPTotalDivider)
         TimeToLevel    = XPPerSecond <= 0 and "<Unknown>" or FormatTime(SecondsToLevel, "%d Days %d Hours %d Mins")
 
@@ -403,19 +403,17 @@ local function GiveTime()
         local rolled = (#XPEvents.Exp.expEvents.TotalXP == math.ceil(MaxHorizon / Resolution))
         local div = 1
         local multiplier2 = multiplier
-        local horizon = settings.Horizon 
+        local horizon = settings.Horizon
         local horizon_ticks = (horizon / Resolution) -- figure out how many full ticks we have to go back
- 
+
         local horizonChanged = HorizonChanged
 
         LastExtentsCheck = now
         for id, expData in pairs(XPEvents) do
-
-            
-            if id == "AA" then 
-                div = 100 
+            if id == "AA" then
+                div = 100
                 multiplier2 = 1
-            else 
+            else
                 div = 1
                 multiplier2 = multiplier
             end
