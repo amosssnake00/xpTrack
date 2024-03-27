@@ -16,13 +16,14 @@ local CurMaxExpPerSec      = 0
 local LastExtentsCheck     = 0
 local LastEntry            = 0
 local XPPerSecond          = 0
+local AAXPPerSecond        = 0
 local PrevXPTotal          = 0
 local PrevAATotal          = 0
 
 local XPToNextLevel        = 0
 local SecondsToLevel       = 0
 local TimeToLevel          = "<Unknown>"
-local Resolution           = 5 -- seconds
+local Resolution           = 15 -- seconds
 local MaxExpSecondsToStore = 3600
 local MaxHorizon           = 3600
 local MinTime              = 60
@@ -327,6 +328,26 @@ local function GiveTime()
     local now = math.floor(getTime())
 
     if mq.TLO.EverQuest.GameState() == "INGAME" then
+        if not XPEvents.Exp then
+            while (now % Resolution) ~= 0 do -- wait for first resolution tick then initialize buffer
+                mq.delay(100)
+                now = math.floor(getTime())
+            end
+            LastEntry = now
+            XPEvents.Exp = {
+                lastFrame = now,
+                expEvents =
+                    ScrollingPlotBuffer:new(math.ceil(MaxHorizon)),
+            }
+        end
+
+        if not XPEvents.AA then
+            XPEvents.AA = {
+                lastFrame = now,
+                expEvents =
+                    ScrollingPlotBuffer:new(math.ceil(MaxHorizon)),
+            }
+        end
         if CheckExpChanged() then
             printf(
                 "\ayXP Gained: \ag%02.3f%% \aw|| \ayXP Total: \ag%02.3f%% \aw|| \ayStart: \am%d \ayCur: \am%d \ayExp/Sec: \ag%2.3f%%",
@@ -344,29 +365,34 @@ local function GiveTime()
                 TrackXP.AAExperience.Total / TrackXP.XPTotalDivider / 100)
         end
 
-        if not XPEvents.Exp then
-            XPEvents.Exp = {
-                lastFrame = now,
-                expEvents =
-                    ScrollingPlotBuffer:new(math.ceil(MaxHorizon / Resolution)),
-            }
-        end
-
-        if not XPEvents.AA then
-            XPEvents.AA = {
-                lastFrame = now,
-                expEvents =
-                    ScrollingPlotBuffer:new(math.ceil(MaxHorizon / Resolution)),
-            }
-        end
+        
     end
 
-    if mq.TLO.EverQuest.GameState() == "INGAME" and now > LastEntry and (getTime() % Resolution) == 0 then
+    if mq.TLO.EverQuest.GameState() == "INGAME" and now > LastEntry and (now % Resolution) ~= 0 then -- if not at resolution tick, just insert the previous data again
+        LastEntry = now
+        XPEvents.Exp.lastFrame = now
+        ---@diagnostic disable-next-line: undefined-field
+        XPEvents.Exp.expEvents:AddPoint(now, XPPerSecond * 60 * 60 * multiplier, TrackXP.Experience.Total)
+        XPEvents.AA.lastFrame = now
+        ---@diagnostic disable-next-line: undefined-field
+        XPEvents.AA.expEvents:AddPoint(now, AAXPPerSecond * 60 * 60, TrackXP.AAExperience.Total)
+
+    elseif mq.TLO.EverQuest.GameState() == "INGAME" and now > LastEntry and (now % Resolution) == 0 then -- if at resolution tick, do proper calculation
         LastEntry = now
         if first_tick == 0 then first_tick = now end
+        local totalevents = #XPEvents.Exp.expEvents.TotalXP
+        local rolled = (totalevents == MaxHorizon)
         offset = XPEvents.Exp.expEvents.Offset
-        horizon_or_less = math.min(settings.Horizon, now - first_tick)
-        trackback = math.max(1, (#XPEvents.Exp.expEvents.TotalXP - (offset - 1)) - (horizon_or_less / Resolution))
+        local horizon = settings.Horizon
+        horizon_or_less = math.min(horizon, math.max(Resolution,(math.floor((totalevents) / Resolution) * Resolution)))
+       
+        if rolled then -- we're full, just go round
+            trackback = ((offset - 2 - horizon) % MaxHorizon) + 1 
+        elseif totalevents > horizon then -- can go back at least one horizon_ticks before hitting start
+            trackback = totalevents - horizon
+        else -- not a full horizon tick yet, take partials (only every Resolution tick)
+            trackback = 1
+        end
 
         if XPEvents.Exp.expEvents.TotalXP[trackback] then
             PrevXPTotal = XPEvents.Exp.expEvents.TotalXP[trackback]
@@ -400,11 +426,11 @@ local function GiveTime()
 
     if now - LastExtentsCheck > 0.5 then
         local newGoal = 0
-        local rolled = (#XPEvents.Exp.expEvents.TotalXP == math.ceil(MaxHorizon / Resolution))
+        local totalevents = #XPEvents.Exp.expEvents.TotalXP
+        local rolled = (totalevents == MaxHorizon)
         local div = 1
         local multiplier2 = multiplier
         local horizon = settings.Horizon
-        local horizon_ticks = (horizon / Resolution) -- figure out how many full ticks we have to go back
 
         local horizonChanged = HorizonChanged
 
@@ -420,7 +446,7 @@ local function GiveTime()
             for idx, exp in ipairs(expData.expEvents.DataY) do
                 -- is this entry visible?
                 local curGoal = math.ceil(exp / MaxStep * MaxStep * 1.25)
-                local visible = expData.expEvents.DataX[idx] > (now - settings.ExpSecondsToStore) / Resolution
+                local visible = expData.expEvents.DataX[idx] > (now - MaxHorizon)
 
                 if visible then
                     if curGoal > newGoal then
@@ -428,14 +454,14 @@ local function GiveTime()
                     end
                     if horizonChanged then
                         if rolled then -- we're full, just go round
-                            expData.expEvents.DataY[idx] = ((((expData.expEvents.TotalXP[idx] - expData.expEvents.TotalXP[offset - 1 + idx - horizon_ticks]) / TrackXP.XPTotalDivider) / horizon) /
+                            expData.expEvents.DataY[idx] = ((((expData.expEvents.TotalXP[idx] - expData.expEvents.TotalXP[((idx - 2 - horizon) % MaxHorizon) + 1]) / TrackXP.XPTotalDivider) / horizon) /
                                 div) * 60 * 60 * multiplier2
-                        elseif idx > horizon_ticks then -- can go back at least one horizon_ticks before hitting start
-                            expData.expEvents.DataY[idx] = ((((expData.expEvents.TotalXP[idx] - expData.expEvents.TotalXP[idx - horizon_ticks]) / TrackXP.XPTotalDivider) / horizon) /
+                        elseif idx > horizon then -- can go back at least one horizon_ticks before hitting start
+                            expData.expEvents.DataY[idx] = ((((expData.expEvents.TotalXP[idx] - expData.expEvents.TotalXP[idx - horizon]) / TrackXP.XPTotalDivider) / horizon) /
                                 div) * 60 * 60 * multiplier2
-                        else -- not a full horizon tick yet, take partials
-                            expData.expEvents.DataY[idx] = ((((expData.expEvents.TotalXP[idx] - expData.expEvents.TotalXP[1]) / TrackXP.XPTotalDivider) / (idx * Resolution)) /
-                                div) * 60 * 60 * multiplier2
+                        else -- not a full horizon tick yet, take partials (only every Resolution tick)
+                            expData.expEvents.DataY[idx] = ((((expData.expEvents.TotalXP[idx] - expData.expEvents.TotalXP[1]) / TrackXP.XPTotalDivider) / math.max(Resolution,(math.floor((idx) / Resolution) * Resolution))) / div) *
+                            60 * 60 * multiplier2
                         end
                     end
                 end
@@ -446,7 +472,7 @@ local function GiveTime()
     end
 end
 
--- check for persona / other char switch and reset stats?
+-- TODO: check for persona / other char switch and reset stats?
 
 mq.imgui.init('xptracker', DrawMainWindow)
 while openGUI do
