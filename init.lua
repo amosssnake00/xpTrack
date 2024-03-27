@@ -24,15 +24,21 @@ local XPToNextLevel        = 0
 local SecondsToLevel       = 0
 local TimeToLevel          = "<Unknown>"
 local Resolution           = 15 -- seconds
-local MaxExpSecondsToStore = 3600
-local MaxHorizon           = 3600
-local MinTime              = 60
+local MaxExpSecondsToStore = 3660 --3600
+local MaxHorizon           = 3600 --3600
+local MinTime              = 30
 
 local offset               = 1
-local horizon_or_less      = 900
+local horizon_or_less      = 60
 local trackback            = 1
 local first_tick           = 0
 
+local ImGui_HorizonStep1   = 1 * 60
+local ImGui_HorizonStep2   = 5 * 60
+local ImGui_HorizonStep3   = 30 * 60
+local ImGui_HorizonStep4   = 60 * 60
+
+local debug                = false
 
 -- timezone calcs
 local utc_now    = os.time(os.date("!*t", os.time()))
@@ -75,8 +81,8 @@ local settings      = {}
 HorizonChanged      = false --
 
 local DefaultConfig = {
-    ['ExpSecondsToStore'] = 1800,
-    ['Horizon']           = 15 * 60,
+    ['ExpSecondsToStore'] = 60,
+    ['Horizon']           = 10,
     ['ExpPlotFillLines']  = true,
     ['GraphMultiplier']   = 1,
 }
@@ -150,12 +156,13 @@ local function DrawMainWindow()
     if shouldDrawGUI then
         ImGui.SameLine()
         local pressed
+        local waitfordata = (getTime() - TrackXP.StartTime) <= MinTime
         if ImGui.Button("Reset Stats", ImGui.GetWindowWidth() * .3, 25) then
             ClearStats()
         end
 
         if ImGui.BeginTable("ExpStats", 2, bit32.bor(ImGuiTableFlags.Borders)) then
-            if getTime() - TrackXP.StartTime > MinTime then
+            if not waitfordata then
                 -- wait for MinTime
                 ImGui.TableNextColumn()
                 ImGui.Text("Exp Session Time")
@@ -219,14 +226,14 @@ local function DrawMainWindow()
                 else
                     ImPlot.SetupAxes("Local Time", string.format("reg. Exp in %sths", multiplier))
                 end
-                ImPlot.SetupAxisLimits(ImAxis.X1, getTime() - settings.ExpSecondsToStore, getTime(), ImGuiCond.Always)
-                ImPlot.SetupAxisLimits(ImAxis.Y1, 1, CurMaxExpPerSec, ImGuiCond.Always)
-
-                ImPlot.PushStyleVar(ImPlotStyleVar.FillAlpha, 0.35)
-                RenderShaded("Exp", XPEvents.Exp, XPEvents.AA)
-                RenderShaded("AA", XPEvents.AA, XPEvents.Exp)
-                ImPlot.PopStyleVar()
-
+                if not waitfordata then
+                    ImPlot.SetupAxisLimits(ImAxis.X1, getTime() - settings.ExpSecondsToStore, getTime(), ImGuiCond.Always)
+                    ImPlot.SetupAxisLimits(ImAxis.Y1, 1, CurMaxExpPerSec, ImGuiCond.Always)
+                    ImPlot.PushStyleVar(ImPlotStyleVar.FillAlpha, 0.35)
+                    RenderShaded("Exp", XPEvents.Exp, XPEvents.AA)
+                    RenderShaded("AA", XPEvents.AA, XPEvents.Exp)
+                    ImPlot.PopStyleVar()
+                end
                 ImPlot.EndPlot()
             end
         end
@@ -255,19 +262,19 @@ local function DrawMainWindow()
             end
 
             settings.Horizon, pressed = ImGui.SliderInt("Horizon for plot",
-                settings.Horizon, 5 * 60, MaxHorizon, "%d s")
+                settings.Horizon, ImGui_HorizonStep1, ImGui_HorizonStep4, "%d s")
             if pressed then
-                if settings.Horizon < 7 * 60 then
-                    settings.Horizon = 5 * 60
+                if settings.Horizon < ImGui_HorizonStep2 then
+                    settings.Horizon = ImGui_HorizonStep1
                     HorizonChanged = true
-                elseif settings.Horizon < 20 * 60 then
-                    settings.Horizon = 10 * 60
+                elseif settings.Horizon < ImGui_HorizonStep3 then
+                    settings.Horizon = ImGui_HorizonStep2
                     HorizonChanged = true
-                elseif settings.Horizon < 45 * 60 then
-                    settings.Horizon = 30 * 60
+                elseif settings.Horizon < ImGui_HorizonStep4 then
+                    settings.Horizon = ImGui_HorizonStep3
                     HorizonChanged = true
                 else
-                    settings.Horizon = 60 * 60
+                    settings.Horizon = ImGui_HorizonStep4
                     HorizonChanged = true
                 end
             end
@@ -324,6 +331,7 @@ local function CheckAAExpChanged()
     return false
 end
 
+
 local function GiveTime()
     local now = math.floor(getTime())
 
@@ -333,11 +341,10 @@ local function GiveTime()
                 mq.delay(100)
                 now = math.floor(getTime())
             end
-            LastEntry = now
             XPEvents.Exp = {
                 lastFrame = now,
                 expEvents =
-                    ScrollingPlotBuffer:new(math.ceil(MaxHorizon)),
+                    ScrollingPlotBuffer:new(math.ceil(2*MaxHorizon)),
             }
         end
 
@@ -345,7 +352,7 @@ local function GiveTime()
             XPEvents.AA = {
                 lastFrame = now,
                 expEvents =
-                    ScrollingPlotBuffer:new(math.ceil(MaxHorizon)),
+                    ScrollingPlotBuffer:new(math.ceil(2*MaxHorizon)),
             }
         end
         if CheckExpChanged() then
@@ -381,15 +388,15 @@ local function GiveTime()
         LastEntry = now
         if first_tick == 0 then first_tick = now end
         local totalevents = #XPEvents.Exp.expEvents.TotalXP
-        local rolled = (totalevents == MaxHorizon)
+        local rolled = (totalevents == 2 * MaxHorizon) -- double horizon so we can still recalc XPS values
         offset = XPEvents.Exp.expEvents.Offset
         local horizon = settings.Horizon
         horizon_or_less = math.min(horizon, math.max(Resolution,(math.floor((totalevents) / Resolution) * Resolution)))
        
-        if rolled then -- we're full, just go round
-            trackback = ((offset - 2 - horizon) % MaxHorizon) + 1 
-        elseif totalevents > horizon then -- can go back at least one horizon_ticks before hitting start
-            trackback = totalevents - horizon
+        if rolled then -- we're full, just go round + 1 (because we have not yet entered the value)
+            trackback = ((offset - 1 - horizon) % (totalevents + 1)) + 1
+        elseif totalevents + 1 > horizon then -- can go back at least one horizon_ticks before hitting start + 1 (because we have not yet entered the value)
+            trackback = totalevents + 1 - horizon 
         else -- not a full horizon tick yet, take partials (only every Resolution tick)
             trackback = 1
         end
@@ -427,12 +434,22 @@ local function GiveTime()
     if now - LastExtentsCheck > 0.5 then
         local newGoal = 0
         local totalevents = #XPEvents.Exp.expEvents.TotalXP
-        local rolled = (totalevents == MaxHorizon)
+        local rolled = (totalevents == 2 * MaxHorizon)
         local div = 1
         local multiplier2 = multiplier
         local horizon = settings.Horizon
 
         local horizonChanged = HorizonChanged
+
+        if horizonChanged == true and debug then
+            print("BEFORE ---------------------------------------------------------->")
+            print("#: "..#XPEvents.AA.expEvents.TotalXP)
+            print("Offset: "..XPEvents.AA.expEvents.Offset)
+            print("horizon: "..horizon)
+            for idx, exp in ipairs(XPEvents.AA.expEvents.DataY) do
+                print(idx.." - EXP Y: "..XPEvents.AA.expEvents.DataY[idx].." - total: "..XPEvents.AA.expEvents.TotalXP[idx])
+            end
+        end
 
         LastExtentsCheck = now
         for id, expData in pairs(XPEvents) do
@@ -454,7 +471,7 @@ local function GiveTime()
                     end
                     if horizonChanged then
                         if rolled then -- we're full, just go round
-                            expData.expEvents.DataY[idx] = ((((expData.expEvents.TotalXP[idx] - expData.expEvents.TotalXP[((idx - 2 - horizon) % MaxHorizon) + 1]) / TrackXP.XPTotalDivider) / horizon) /
+                            expData.expEvents.DataY[idx] = ((((expData.expEvents.TotalXP[idx] - expData.expEvents.TotalXP[((idx - 1 - horizon) % totalevents) + 1]) / TrackXP.XPTotalDivider) / horizon) /
                                 div) * 60 * 60 * multiplier2
                         elseif idx > horizon then -- can go back at least one horizon_ticks before hitting start
                             expData.expEvents.DataY[idx] = ((((expData.expEvents.TotalXP[idx] - expData.expEvents.TotalXP[idx - horizon]) / TrackXP.XPTotalDivider) / horizon) /
@@ -468,6 +485,15 @@ local function GiveTime()
             end
         end
         GoalMaxExpPerSec = newGoal
+        if horizonChanged == true and debug then
+            print("AFTER <---------------------------------------------------------")
+            print("#: "..#XPEvents.AA.expEvents.TotalXP)
+            print("Offset: "..XPEvents.AA.expEvents.Offset)
+            print("horizon: "..horizon)
+            for idx, exp in ipairs(XPEvents.AA.expEvents.DataY) do
+                print(idx.." - EXP Y: "..XPEvents.AA.expEvents.DataY[idx].." - total: "..XPEvents.AA.expEvents.TotalXP[idx])
+            end
+        end
         HorizonChanged = false
     end
 end
