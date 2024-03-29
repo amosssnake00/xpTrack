@@ -24,7 +24,7 @@ local XPToNextLevel        = 0
 local SecondsToLevel       = 0
 local TimeToLevel          = "<Unknown>"
 local Resolution           = 15 -- seconds
-local MaxExpSecondsToStore = 3660 --3600
+local MaxExpSecondsToStore = 3600 --3600
 local MaxHorizon           = 3600 --3600
 local MinTime              = 30
 
