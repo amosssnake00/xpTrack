@@ -2,7 +2,7 @@
 -- shamelessly ripped from RGMercs Lua
 -- as suggested by Derple
 
--- initial version
+-- V1.2 Exp Horizon
 
 local mq                   = require('mq')
 local ImGui                = require('ImGui')
