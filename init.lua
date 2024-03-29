@@ -81,8 +81,8 @@ local settings      = {}
 HorizonChanged      = false --
 
 local DefaultConfig = {
-    ['ExpSecondsToStore'] = 60,
-    ['Horizon']           = 10,
+    ['ExpSecondsToStore'] = MaxExpSecondsToStore,
+    ['Horizon']           = ImGui_HorizonStep2,
     ['ExpPlotFillLines']  = true,
     ['GraphMultiplier']   = 1,
 }
