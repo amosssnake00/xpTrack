@@ -23,7 +23,7 @@ local PrevAATotal          = 0
 local XPToNextLevel        = 0
 local SecondsToLevel       = 0
 local TimeToLevel          = "<Unknown>"
-local Resolution           = 15 -- seconds
+local Resolution           = 15   -- seconds
 local MaxExpSecondsToStore = 3600 --3600
 local MaxHorizon           = 3600 --3600
 local MinTime              = 30
@@ -41,16 +41,22 @@ local ImGui_HorizonStep4   = 60 * 60
 local debug                = false
 
 -- timezone calcs
-local utc_now    = os.time(os.date("!*t", os.time()))
-local local_now  = os.time(os.date("*t", os.time()))
-local utc_offset = local_now - utc_now
+---@diagnostic disable-next-line: param-type-mismatch
+local utc_now              = os.time(os.date("!*t", os.time()))
+---@diagnostic disable-next-line: param-type-mismatch
+local local_now            = os.time(os.date("*t", os.time()))
+local utc_offset           = local_now - utc_now
 
 -- Check if we're currently in daylight saving time
-local dst        = os.date("*t", os.time())["isdst"]
+local dst                  = os.date("*t", os.time())["isdst"]
 
 -- If we're in DST, add one hour
 if dst then
     utc_offset = utc_offset + 3600
+end
+
+function OnEmu()
+    return (mq.TLO.MacroQuest.BuildName():lower() or "") == "emu"
 end
 
 local function getTime()
@@ -62,8 +68,8 @@ local TrackXP       = {
     PlayerAA = mq.TLO.Me.AAPointsTotal(),
     StartTime = getTime(),
 
-    XPTotalPerLevel = 100000,
-    XPTotalDivider = 1000,
+    XPTotalPerLevel = OnEmu() and 330 or 100000,
+    XPTotalDivider = OnEmu() and 1 or 1000,
 
     Experience = {
         Base = mq.TLO.Me.Exp(),
@@ -344,7 +350,7 @@ local function GiveTime()
             XPEvents.Exp = {
                 lastFrame = now,
                 expEvents =
-                    ScrollingPlotBuffer:new(math.ceil(2*MaxHorizon)),
+                    ScrollingPlotBuffer:new(math.ceil(2 * MaxHorizon)),
             }
         end
 
@@ -352,7 +358,7 @@ local function GiveTime()
             XPEvents.AA = {
                 lastFrame = now,
                 expEvents =
-                    ScrollingPlotBuffer:new(math.ceil(2*MaxHorizon)),
+                    ScrollingPlotBuffer:new(math.ceil(2 * MaxHorizon)),
             }
         end
         if CheckExpChanged() then
@@ -371,8 +377,6 @@ local function GiveTime()
                 TrackXP.AAExperience.Gained / TrackXP.XPTotalDivider / 100,
                 TrackXP.AAExperience.Total / TrackXP.XPTotalDivider / 100)
         end
-
-        
     end
 
     if mq.TLO.EverQuest.GameState() == "INGAME" and now > LastEntry and (now % Resolution) ~= 0 then -- if not at resolution tick, just insert the previous data again
@@ -383,7 +387,6 @@ local function GiveTime()
         XPEvents.AA.lastFrame = now
         ---@diagnostic disable-next-line: undefined-field
         XPEvents.AA.expEvents:AddPoint(now, AAXPPerSecond * 60 * 60, TrackXP.AAExperience.Total)
-
     elseif mq.TLO.EverQuest.GameState() == "INGAME" and now > LastEntry and (now % Resolution) == 0 then -- if at resolution tick, do proper calculation
         LastEntry = now
         if first_tick == 0 then first_tick = now end
@@ -391,13 +394,13 @@ local function GiveTime()
         local rolled = (totalevents == 2 * MaxHorizon) -- double horizon so we can still recalc XPS values
         offset = XPEvents.Exp.expEvents.Offset
         local horizon = settings.Horizon
-        horizon_or_less = math.min(horizon, math.max(Resolution,(math.floor((totalevents) / Resolution) * Resolution)))
-       
-        if rolled then -- we're full, just go round + 1 (because we have not yet entered the value)
+        horizon_or_less = math.min(horizon, math.max(Resolution, (math.floor((totalevents) / Resolution) * Resolution)))
+
+        if rolled then                        -- we're full, just go round + 1 (because we have not yet entered the value)
             trackback = ((offset - 1 - horizon) % (totalevents + 1)) + 1
         elseif totalevents + 1 > horizon then -- can go back at least one horizon_ticks before hitting start + 1 (because we have not yet entered the value)
-            trackback = totalevents + 1 - horizon 
-        else -- not a full horizon tick yet, take partials (only every Resolution tick)
+            trackback = totalevents + 1 - horizon
+        else                                  -- not a full horizon tick yet, take partials (only every Resolution tick)
             trackback = 1
         end
 
@@ -443,11 +446,11 @@ local function GiveTime()
 
         if horizonChanged == true and debug then
             print("BEFORE ---------------------------------------------------------->")
-            print("#: "..#XPEvents.AA.expEvents.TotalXP)
-            print("Offset: "..XPEvents.AA.expEvents.Offset)
-            print("horizon: "..horizon)
+            print("#: " .. #XPEvents.AA.expEvents.TotalXP)
+            print("Offset: " .. XPEvents.AA.expEvents.Offset)
+            print("horizon: " .. horizon)
             for idx, exp in ipairs(XPEvents.AA.expEvents.DataY) do
-                print(idx.." - EXP Y: "..XPEvents.AA.expEvents.DataY[idx].." - total: "..XPEvents.AA.expEvents.TotalXP[idx])
+                print(idx .. " - EXP Y: " .. XPEvents.AA.expEvents.DataY[idx] .. " - total: " .. XPEvents.AA.expEvents.TotalXP[idx])
             end
         end
 
@@ -477,8 +480,8 @@ local function GiveTime()
                             expData.expEvents.DataY[idx] = ((((expData.expEvents.TotalXP[idx] - expData.expEvents.TotalXP[idx - horizon]) / TrackXP.XPTotalDivider) / horizon) /
                                 div) * 60 * 60 * multiplier2
                         else -- not a full horizon tick yet, take partials (only every Resolution tick)
-                            expData.expEvents.DataY[idx] = ((((expData.expEvents.TotalXP[idx] - expData.expEvents.TotalXP[1]) / TrackXP.XPTotalDivider) / math.max(Resolution,(math.floor((idx) / Resolution) * Resolution))) / div) *
-                            60 * 60 * multiplier2
+                            expData.expEvents.DataY[idx] = ((((expData.expEvents.TotalXP[idx] - expData.expEvents.TotalXP[1]) / TrackXP.XPTotalDivider) / math.max(Resolution, (math.floor((idx) / Resolution) * Resolution))) / div) *
+                                60 * 60 * multiplier2
                         end
                     end
                 end
@@ -487,11 +490,11 @@ local function GiveTime()
         GoalMaxExpPerSec = newGoal
         if horizonChanged == true and debug then
             print("AFTER <---------------------------------------------------------")
-            print("#: "..#XPEvents.AA.expEvents.TotalXP)
-            print("Offset: "..XPEvents.AA.expEvents.Offset)
-            print("horizon: "..horizon)
+            print("#: " .. #XPEvents.AA.expEvents.TotalXP)
+            print("Offset: " .. XPEvents.AA.expEvents.Offset)
+            print("horizon: " .. horizon)
             for idx, exp in ipairs(XPEvents.AA.expEvents.DataY) do
-                print(idx.." - EXP Y: "..XPEvents.AA.expEvents.DataY[idx].." - total: "..XPEvents.AA.expEvents.TotalXP[idx])
+                print(idx .. " - EXP Y: " .. XPEvents.AA.expEvents.DataY[idx] .. " - total: " .. XPEvents.AA.expEvents.TotalXP[idx])
             end
         end
         HorizonChanged = false
