@@ -425,6 +425,18 @@ local function CheckAAExpChangedEmu()
     return false
 end
 
+local function CommandHandler(...)
+    local args = { ..., }
+    if args[1] == "reset" then
+        ClearStats()
+        printf("\aw[\atXP Track\ax] \aoStats Reset")
+    elseif args[1] == 'exit' then
+        openGUI = false
+    end
+end
+
+mq.bind("/xpt", CommandHandler)
+printf("\aw[\atXP Track\ax] \aoCommand: \ay/xpt \aoArgumentss: \aw[\ayreset\aw|\ayexit\aw]")
 
 local function GiveTime()
     local now = math.floor(getTime())
