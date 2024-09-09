@@ -8,6 +8,7 @@ local mq                   = require('mq')
 local ImGui                = require('ImGui')
 local ImPlot               = require('ImPlot')
 local ScrollingPlotBuffer  = require('utils.scrolling_plot_buffer')
+local OnEmu                = (mq.TLO.MacroQuest.BuildName():lower() or "") == "emu"
 
 local XPEvents             = {}
 local MaxStep              = 50
@@ -19,10 +20,16 @@ local XPPerSecond          = 0
 local AAXPPerSecond        = 0
 local PrevXPTotal          = 0
 local PrevAATotal          = 0
+local startXP              = OnEmu and mq.TLO.Me.PctExp() or mq.TLO.Me.Exp()
+local startLvl             = mq.TLO.Me.Level()
+local startAAXP            = OnEmu and mq.TLO.Me.PctAAExp() or mq.TLO.Me.AAExp()
+local startAA              = mq.TLO.Me.AAPointsTotal()
 
 local XPToNextLevel        = 0
 local SecondsToLevel       = 0
+local SecondsToAA          = 0
 local TimeToLevel          = "<Unknown>"
+local TimeToAA             = "<Unknown>"
 local Resolution           = 15   -- seconds
 local MaxExpSecondsToStore = 3600 --3600
 local MaxHorizon           = 3600 --3600
@@ -55,29 +62,25 @@ if dst then
     utc_offset = utc_offset + 3600
 end
 
-function OnEmu()
-    return (mq.TLO.MacroQuest.BuildName():lower() or "") == "emu"
-end
-
 local function getTime()
     return os.time() + utc_offset
 end
 
 local TrackXP       = {
-    PlayerLevel = mq.TLO.Me.Level(),
+    PlayerLevel = mq.TLO.Me.Level() or 0,
     PlayerAA = mq.TLO.Me.AAPointsTotal(),
     StartTime = getTime(),
 
-    XPTotalPerLevel = OnEmu() and 330 or 100000,
-    XPTotalDivider = OnEmu() and 1 or 1000,
+    XPTotalPerLevel = OnEmu and 330 or 100000,
+    XPTotalDivider = OnEmu and 1 or 1000,
 
     Experience = {
-        Base = mq.TLO.Me.Exp(),
+        Base = OnEmu and ((mq.TLO.Me.Level() * 100) + mq.TLO.Me.PctExp()) or mq.TLO.Me.Exp(),
         Total = 0,
         Gained = 0,
     },
     AAExperience = {
-        Base = mq.TLO.Me.AAExp(),
+        Base = OnEmu and ((mq.TLO.Me.AAPointsTotal() * 100) + mq.TLO.Me.PctAAExp()) or mq.TLO.Me.AAExp(),
         Total = 0,
         Gained = 0,
     },
@@ -98,27 +101,30 @@ settings            = DefaultConfig
 local multiplier    = tonumber(settings.GraphMultiplier)
 
 local function ClearStats()
-    TrackXP = {
+    TrackXP   = {
         PlayerLevel = mq.TLO.Me.Level(),
         PlayerAA = mq.TLO.Me.AAPointsTotal(),
         StartTime = getTime(),
 
-        XPTotalPerLevel = 100000,
-        XPTotalDivider = 1000,
+        XPTotalPerLevel = OnEmu and 330 or 100000,
+        XPTotalDivider = OnEmu and 1 or 1000,
 
         Experience = {
-            Base = mq.TLO.Me.Exp(),
+            Base = OnEmu and ((mq.TLO.Me.Level() * 100) + mq.TLO.Me.PctExp()) or mq.TLO.Me.Exp(),
             Total = 0,
             Gained = 0,
         },
         AAExperience = {
-            Base = mq.TLO.Me.AAExp(),
+            Base = OnEmu and ((mq.TLO.Me.AAPointsTotal() * 100) + mq.TLO.Me.PctAAExp()) or mq.TLO.Me.AAExp(),
             Total = 0,
             Gained = 0,
         },
     }
-
-    XPEvents = {}
+    startXP   = OnEmu and (mq.TLO.Me.PctExp()) or mq.TLO.Me.Exp()
+    startLvl  = mq.TLO.Me.Level()
+    startAAXP = OnEmu and (mq.TLO.Me.PctAAExp()) or mq.TLO.Me.AAExp()
+    startAA   = mq.TLO.Me.AAPointsTotal()
+    XPEvents  = {}
 end
 
 local function RenderShaded(type, currentData, otherData)
@@ -166,7 +172,14 @@ local function DrawMainWindow()
         if ImGui.Button("Reset Stats", ImGui.GetWindowWidth() * .3, 25) then
             ClearStats()
         end
-
+        ImGui.SameLine()
+        ImGui.TextColored(ImVec4(0, 1, 1, 1), "Current ")
+        ImGui.SameLine()
+        ImGui.TextColored(ImVec4(0.352, 0.970, 0.399, 1.000), "XP: %2.3f%%", mq.TLO.Me.PctExp())
+        if TrackXP.PlayerLevel >= 51 then
+            ImGui.SameLine()
+            ImGui.TextColored(ImVec4(0.983, 0.729, 0.290, 1.000), "  AA XP: %2.3f%% ", mq.TLO.Me.PctAAExp())
+        end
         if ImGui.BeginTable("ExpStats", 2, bit32.bor(ImGuiTableFlags.Borders)) then
             if not waitfordata then
                 -- wait for MinTime
@@ -178,30 +191,67 @@ local function DrawMainWindow()
                 ImGui.Text("Exp Horizon Time")
                 ImGui.TableNextColumn()
                 ImGui.Text(FormatTime(settings.Horizon))
+                -- XP Section
+                ImGui.TableNextColumn()
+                ImGui.TextColored(ImVec4(1, 1, 0, 1), "Exp Start value")
+                ImGui.TableNextColumn()
+                ImGui.TextColored(ImVec4(1, 1, 0, 1), "Lvl: ")
+                ImGui.SameLine()
+                ImGui.TextColored(ImVec4(0, 1, 1, 1), "%d ", startLvl)
+                ImGui.SameLine()
+                ImGui.TextColored(ImVec4(1, 1, 0, 1), "XP: ")
+                ImGui.SameLine()
+                ImGui.TextColored(ImVec4(0, 1, 1, 1), "%2.3f%%", startXP)
                 ImGui.TableNextColumn()
                 ImGui.Text("Exp Gained")
                 ImGui.TableNextColumn()
-                ImGui.Text(string.format("%2.3f%%", TrackXP.Experience.Total / TrackXP.XPTotalDivider))
-                ImGui.TableNextColumn()
-                ImGui.Text("AA Gained")
-                ImGui.TableNextColumn()
-                ImGui.Text(string.format("%2.2f", TrackXP.AAExperience.Total / TrackXP.XPTotalDivider / 100))
+                local color = TrackXP.Experience.Total > 0 and ImVec4(0, 1, 0, 1) or ImVec4(1, 0, 0, 1)
+                ImGui.TextColored(ImVec4(0.983, 0.729, 0.290, 1.000), "%d Lvls ", (TrackXP.PlayerLevel - startLvl))
+                ImGui.SameLine()
+                ImGui.TextColored(color, "%2.3f%% Xp", (OnEmu and TrackXP.Experience.Total or TrackXP.Experience.Total / TrackXP.XPTotalDivider))
                 ImGui.TableNextColumn()
                 ImGui.Text("current Exp / Min")
                 ImGui.TableNextColumn()
-                ImGui.Text(string.format("%2.3f%%", XPPerSecond * 60))
+                ImGui.Text("%2.3f%%", XPPerSecond * 60)
                 ImGui.TableNextColumn()
                 ImGui.Text("current Exp / Hr")
                 ImGui.TableNextColumn()
-                ImGui.Text(string.format("%2.3f%%", XPPerSecond * 3600))
+                ImGui.Text("%2.3f%%", XPPerSecond * 3600)
                 ImGui.TableNextColumn()
                 ImGui.Text("Time To Level")
                 ImGui.TableNextColumn()
-                ImGui.Text(string.format("%s", TimeToLevel))
-                ImGui.TableNextColumn()
-                ImGui.Text("current AA / Hr")
-                ImGui.TableNextColumn()
-                ImGui.Text(string.format("%2.2f", AAXPPerSecond * 60 * 60))
+                ImGui.TextColored(ImVec4(0.983, 0.729, 0.290, 1.000), "%s", TimeToLevel)
+                -- AA Section
+                if TrackXP.PlayerLevel >= 51 then
+                    ImGui.TableNextColumn()
+                    ImGui.TextColored(ImVec4(1, 1, 0, 1), "AA Start value")
+                    ImGui.TableNextColumn()
+                    ImGui.TextColored(ImVec4(1, 1, 0, 1), "Pts: ")
+                    ImGui.SameLine()
+                    ImGui.TextColored(ImVec4(0, 1, 1, 1), "%d ", startAA)
+                    ImGui.SameLine()
+                    ImGui.TextColored(ImVec4(1, 1, 0, 1), "AA XP: ")
+                    ImGui.SameLine()
+                    ImGui.TextColored(ImVec4(0, 1, 1, 1), "%2.3f%%", startAAXP)
+                    ImGui.TableNextColumn()
+                    ImGui.Text("AA Gained")
+                    ImGui.TableNextColumn()
+                    ImGui.TextColored(ImVec4(0.983, 0.729, 0.290, 1.000), "%d Pts", (TrackXP.PlayerAA - startAA))
+                    ImGui.SameLine()
+                    ImGui.TextColored(ImVec4(0, 1, 0, 1), "%2.3f%% AA Xp", (OnEmu and TrackXP.AAExperience.Total or TrackXP.AAExperience.Total / TrackXP.XPTotalDivider / 100))
+                    ImGui.TableNextColumn()
+                    ImGui.Text("current AA / Min")
+                    ImGui.TableNextColumn()
+                    ImGui.Text("%2.2f%%", AAXPPerSecond * 60)
+                    ImGui.TableNextColumn()
+                    ImGui.Text("current AA / Hr")
+                    ImGui.TableNextColumn()
+                    ImGui.Text("%2.1f Pts", (AAXPPerSecond * 3600) / 100)
+                    ImGui.TableNextColumn()
+                    ImGui.Text("Time To AA")
+                    ImGui.TableNextColumn()
+                    ImGui.TextColored(ImVec4(0.983, 0.729, 0.290, 1.000), "%s", TimeToAA)
+                end
             else
                 ImGui.TableNextColumn()
                 ImGui.Text("waiting for data...")
@@ -337,6 +387,44 @@ local function CheckAAExpChanged()
     return false
 end
 
+local function CheckExpChangedEmu()
+    local me = mq.TLO.Me
+    local currentExp = ((me.Level() * 100) + me.PctExp())
+    if currentExp ~= TrackXP.Experience.Base then
+        if me.Level() >= TrackXP.PlayerLevel then
+            TrackXP.Experience.Gained = currentExp - TrackXP.Experience.Base
+        else
+            TrackXP.Experience.Gained = TrackXP.Experience.Base - currentExp
+        end
+
+        TrackXP.Experience.Total = TrackXP.Experience.Total + TrackXP.Experience.Gained
+        TrackXP.Experience.Base = currentExp
+        TrackXP.PlayerLevel = me.Level()
+
+        return true
+    end
+
+    TrackXP.Experience.Gained = 0
+    return false
+end
+
+local function CheckAAExpChangedEmu()
+    local me = mq.TLO.Me
+    local currentExp = ((me.AAPointsTotal() * 100) + me.PctAAExp())
+    if currentExp ~= TrackXP.AAExperience.Base then
+        TrackXP.AAExperience.Gained = currentExp - TrackXP.AAExperience.Base
+
+        TrackXP.AAExperience.Total = TrackXP.AAExperience.Total + TrackXP.AAExperience.Gained
+        TrackXP.AAExperience.Base = currentExp
+        TrackXP.PlayerAA = me.AAPointsTotal()
+
+        return true
+    end
+
+    TrackXP.AAExperience.Gained = 0
+    return false
+end
+
 
 local function GiveTime()
     local now = math.floor(getTime())
@@ -361,21 +449,42 @@ local function GiveTime()
                     ScrollingPlotBuffer:new(math.ceil(2 * MaxHorizon)),
             }
         end
-        if CheckExpChanged() then
-            printf(
-                "\ayXP Gained: \ag%02.3f%% \aw|| \ayXP Total: \ag%02.3f%% \aw|| \ayStart: \am%d \ayCur: \am%d \ayExp/Sec: \ag%2.3f%%",
-                TrackXP.Experience.Gained / TrackXP.XPTotalDivider,
-                TrackXP.Experience.Total / TrackXP.XPTotalDivider,
-                TrackXP.StartTime,
-                now,
-                TrackXP.Experience.Total / TrackXP.XPTotalDivider /
-                (math.floor(now / Resolution) * Resolution - TrackXP.StartTime))
-        end
+        if not OnEmu then
+            if CheckExpChanged() then
+                printf(
+                    "\ayXP Gained: \ag%02.3f%% \aw|| \ayXP Total: \ag%02.3f%% \aw|| \ayStart: \am%d \ayCur: \am%d \ayExp/Sec: \ag%2.3f%%",
+                    TrackXP.Experience.Gained / TrackXP.XPTotalDivider,
+                    TrackXP.Experience.Total / TrackXP.XPTotalDivider,
+                    TrackXP.StartTime,
+                    now,
+                    TrackXP.Experience.Total / TrackXP.XPTotalDivider /
+                    (math.floor(now / Resolution) * Resolution - TrackXP.StartTime))
+            end
 
-        if mq.TLO.Me.PctAAExp() > 0 and CheckAAExpChanged() then
-            printf("\ayAA Gained: \ag%2.2f \aw|| \ayAA Total: \ag%2.2f",
-                TrackXP.AAExperience.Gained / TrackXP.XPTotalDivider / 100,
-                TrackXP.AAExperience.Total / TrackXP.XPTotalDivider / 100)
+            if mq.TLO.Me.PctAAExp() > 0 and CheckAAExpChanged() then
+                printf("\ayAA Gained: \ag%2.2f \aw|| \ayAA Total: \ag%2.2f",
+                    TrackXP.AAExperience.Gained / TrackXP.XPTotalDivider / 100,
+                    TrackXP.AAExperience.Total / TrackXP.XPTotalDivider / 100)
+            end
+        else
+            if CheckExpChangedEmu() then
+                printf(
+                    "\ayXP Gained: \ag%02.3f%% \aw|| \ayXP Total: \ag%02.3f%% \aw|| \ayStart: \am%d \ayCur: \am%d \aw|| \ayExp/Min: \ag%2.3f%%  \ayExp/Hr: \ag%2.3f%%",
+                    TrackXP.Experience.Gained,
+                    TrackXP.Experience.Total,
+                    TrackXP.StartTime,
+                    now,
+                    (XPPerSecond * 60),
+                    (XPPerSecond * 3600))
+            end
+
+            if mq.TLO.Me.PctAAExp() > 0 and CheckAAExpChangedEmu() then
+                printf("\ayAA Gained: \ag%2.2f%% \aw|| \ayAA Total: \ag%2.2f%%, \aw|| \ayAA/Min: \ag%2.2f%% \aw|| \ayAA/Hr: \ag%2.1f pts",
+                    TrackXP.AAExperience.Gained,
+                    TrackXP.AAExperience.Total,
+                    (AAXPPerSecond * 60),
+                    (AAXPPerSecond * 36))
+            end
         end
     end
 
@@ -415,14 +524,18 @@ local function GiveTime()
             PrevAATotal = TrackXP.AAExperience.Total
         end
 
-        XPPerSecond    = ((TrackXP.Experience.Total - PrevXPTotal) / TrackXP.XPTotalDivider) / horizon_or_less
-        XPToNextLevel  = TrackXP.XPTotalPerLevel - mq.TLO.Me.Exp()
-        AAXPPerSecond  = (((TrackXP.AAExperience.Total - PrevAATotal) / TrackXP.XPTotalDivider) / horizon_or_less) /
-            100 -- divide by 100 to get full AA, not % values
-        SecondsToLevel = XPToNextLevel / (XPPerSecond * TrackXP.XPTotalDivider)
-        TimeToLevel    = XPPerSecond <= 0 and "<Unknown>" or FormatTime(SecondsToLevel, "%d Days %d Hours %d Mins")
+        XPPerSecond            = ((TrackXP.Experience.Total - PrevXPTotal) / TrackXP.XPTotalDivider) / horizon_or_less
+        XPToNextLevel          = TrackXP.XPTotalPerLevel - mq.TLO.Me.Exp()
+        AAXPPerSecond          = OnEmu and (((TrackXP.AAExperience.Total - PrevAATotal) / TrackXP.XPTotalDivider) / horizon_or_less) or
+            ((((TrackXP.AAExperience.Total - PrevAATotal) / TrackXP.XPTotalDivider) / horizon_or_less) /
+                100) -- divide by 100 to get full AA, not % values
 
+        SecondsToLevel         = XPToNextLevel / (XPPerSecond * TrackXP.XPTotalDivider)
+        TimeToLevel            = XPPerSecond <= 0 and "<Unknown>" or FormatTime(SecondsToLevel, "%d Days %d Hours %d Mins")
 
+        local XPToNextAA       = 100 - mq.TLO.Me.PctAAExp()
+        SecondsToAA            = XPToNextAA / (AAXPPerSecond * TrackXP.XPTotalDivider)
+        TimeToAA               = AAXPPerSecond <= 0 and "<Unknown>" or FormatTime(SecondsToAA, "%d Days %d Hours %d Mins")
 
         XPEvents.Exp.lastFrame = now
         ---@diagnostic disable-next-line: undefined-field
