@@ -391,11 +391,7 @@ local function CheckExpChangedEmu()
     local me = mq.TLO.Me
     local currentExp = ((me.Level() * 100) + me.PctExp())
     if currentExp ~= TrackXP.Experience.Base then
-        if me.Level() >= TrackXP.PlayerLevel then
-            TrackXP.Experience.Gained = currentExp - TrackXP.Experience.Base
-        else
-            TrackXP.Experience.Gained = TrackXP.Experience.Base - currentExp
-        end
+        TrackXP.Experience.Gained = currentExp - TrackXP.Experience.Base
 
         TrackXP.Experience.Total = TrackXP.Experience.Total + TrackXP.Experience.Gained
         TrackXP.Experience.Base = currentExp
