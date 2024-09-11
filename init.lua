@@ -180,100 +180,101 @@ local function DrawMainWindow()
             ImGui.SameLine()
             ImGui.TextColored(ImVec4(0.983, 0.729, 0.290, 1.000), "  AA XP: %2.3f%% ", mq.TLO.Me.PctAAExp())
         end
-        if ImGui.BeginTable("ExpStats", 2, bit32.bor(ImGuiTableFlags.Borders)) then
-            if not waitfordata then
-                -- wait for MinTime
-                ImGui.TableNextColumn()
-                ImGui.Text("Exp Session Time")
-                ImGui.TableNextColumn()
-                ImGui.Text(FormatTime(getTime() - TrackXP.StartTime))
-                ImGui.TableNextColumn()
-                ImGui.Text("Exp Horizon Time")
-                ImGui.TableNextColumn()
-                ImGui.Text(FormatTime(settings.Horizon))
-                -- XP Section
-                ImGui.TableNextColumn()
-                ImGui.TextColored(ImVec4(1, 1, 0, 1), "Exp Start value")
-                ImGui.TableNextColumn()
-                ImGui.TextColored(ImVec4(1, 1, 0, 1), "Lvl: ")
-                ImGui.SameLine()
-                ImGui.TextColored(ImVec4(0, 1, 1, 1), "%d ", startLvl)
-                ImGui.SameLine()
-                ImGui.TextColored(ImVec4(1, 1, 0, 1), "XP: ")
-                ImGui.SameLine()
-                ImGui.TextColored(ImVec4(0, 1, 1, 1), "%2.3f%%", startXP)
-                ImGui.TableNextColumn()
-                ImGui.Text("Exp Gained")
-                ImGui.TableNextColumn()
-                local color = TrackXP.Experience.Total > 0 and ImVec4(0, 1, 0, 1) or ImVec4(1, 0, 0, 1)
-                ImGui.TextColored(ImVec4(0.983, 0.729, 0.290, 1.000), "%d Lvls ", (TrackXP.PlayerLevel - startLvl))
-                ImGui.SameLine()
-                ImGui.TextColored(color, "%2.3f%% Xp", (OnEmu and TrackXP.Experience.Total or TrackXP.Experience.Total / TrackXP.XPTotalDivider))
-                ImGui.TableNextColumn()
-                ImGui.Text("current Exp / Min")
-                ImGui.TableNextColumn()
-                ImGui.Text("%2.3f%%", XPPerSecond * 60)
-                ImGui.TableNextColumn()
-                ImGui.Text("current Exp / Hr")
-                ImGui.TableNextColumn()
-                ImGui.Text("%2.3f%%", XPPerSecond * 3600)
-                ImGui.TableNextColumn()
-                ImGui.Text("Time To Level")
-                ImGui.TableNextColumn()
-                ImGui.TextColored(ImVec4(0.983, 0.729, 0.290, 1.000), "%s", TimeToLevel)
-                -- AA Section
-                if TrackXP.PlayerLevel >= 51 then
+        if ImGui.CollapsingHeader("Exp Stats") then
+            if ImGui.BeginTable("ExpStats", 2, bit32.bor(ImGuiTableFlags.Borders)) then
+                if not waitfordata then
+                    -- wait for MinTime
                     ImGui.TableNextColumn()
-                    ImGui.TextColored(ImVec4(1, 1, 0, 1), "AA Start value")
+                    ImGui.Text("Exp Session Time")
                     ImGui.TableNextColumn()
-                    ImGui.TextColored(ImVec4(1, 1, 0, 1), "Pts: ")
+                    ImGui.Text(FormatTime(getTime() - TrackXP.StartTime))
+                    ImGui.TableNextColumn()
+                    ImGui.Text("Exp Horizon Time")
+                    ImGui.TableNextColumn()
+                    ImGui.Text(FormatTime(settings.Horizon))
+                    -- XP Section
+                    ImGui.TableNextColumn()
+                    ImGui.TextColored(ImVec4(1, 1, 0, 1), "Exp Start value")
+                    ImGui.TableNextColumn()
+                    ImGui.TextColored(ImVec4(1, 1, 0, 1), "Lvl: ")
                     ImGui.SameLine()
-                    ImGui.TextColored(ImVec4(0, 1, 1, 1), "%d ", startAA)
+                    ImGui.TextColored(ImVec4(0, 1, 1, 1), "%d ", startLvl)
                     ImGui.SameLine()
-                    ImGui.TextColored(ImVec4(1, 1, 0, 1), "AA XP: ")
+                    ImGui.TextColored(ImVec4(1, 1, 0, 1), "XP: ")
                     ImGui.SameLine()
-                    ImGui.TextColored(ImVec4(0, 1, 1, 1), "%2.3f%%", startAAXP)
+                    ImGui.TextColored(ImVec4(0, 1, 1, 1), "%2.3f%%", startXP)
                     ImGui.TableNextColumn()
-                    ImGui.Text("AA Gained")
+                    ImGui.Text("Exp Gained")
                     ImGui.TableNextColumn()
-                    ImGui.TextColored(ImVec4(0.983, 0.729, 0.290, 1.000), "%d Pts", (TrackXP.PlayerAA - startAA))
+                    local color = TrackXP.Experience.Total > 0 and ImVec4(0, 1, 0, 1) or ImVec4(1, 0, 0, 1)
+                    ImGui.TextColored(ImVec4(0.983, 0.729, 0.290, 1.000), "%d Lvls ", (TrackXP.PlayerLevel - startLvl))
                     ImGui.SameLine()
-                    ImGui.TextColored(ImVec4(0, 1, 0, 1), "%2.3f%% AA Xp", (OnEmu and TrackXP.AAExperience.Total or TrackXP.AAExperience.Total / TrackXP.XPTotalDivider / 100))
+                    ImGui.TextColored(color, "%2.3f%% Xp", (OnEmu and TrackXP.Experience.Total or TrackXP.Experience.Total / TrackXP.XPTotalDivider))
                     ImGui.TableNextColumn()
-                    ImGui.Text("current AA / Min")
+                    ImGui.Text("current Exp / Min")
                     ImGui.TableNextColumn()
-                    ImGui.Text("%2.2f%%", AAXPPerSecond * 60)
+                    ImGui.Text("%2.3f%%", XPPerSecond * 60)
                     ImGui.TableNextColumn()
-                    ImGui.Text("current AA / Hr")
+                    ImGui.Text("current Exp / Hr")
                     ImGui.TableNextColumn()
-                    ImGui.Text("%2.1f Pts", (AAXPPerSecond * 3600) / 100)
+                    ImGui.Text("%2.3f%%", XPPerSecond * 3600)
                     ImGui.TableNextColumn()
-                    ImGui.Text("Time To AA")
+                    ImGui.Text("Time To Level")
                     ImGui.TableNextColumn()
-                    ImGui.TextColored(ImVec4(0.983, 0.729, 0.290, 1.000), "%s", TimeToAA)
+                    ImGui.TextColored(ImVec4(0.983, 0.729, 0.290, 1.000), "%s", TimeToLevel)
+                    -- AA Section
+                    if TrackXP.PlayerLevel >= 51 then
+                        ImGui.TableNextColumn()
+                        ImGui.TextColored(ImVec4(1, 1, 0, 1), "AA Start value")
+                        ImGui.TableNextColumn()
+                        ImGui.TextColored(ImVec4(1, 1, 0, 1), "Pts: ")
+                        ImGui.SameLine()
+                        ImGui.TextColored(ImVec4(0, 1, 1, 1), "%d ", startAA)
+                        ImGui.SameLine()
+                        ImGui.TextColored(ImVec4(1, 1, 0, 1), "AA XP: ")
+                        ImGui.SameLine()
+                        ImGui.TextColored(ImVec4(0, 1, 1, 1), "%2.3f%%", startAAXP)
+                        ImGui.TableNextColumn()
+                        ImGui.Text("AA Gained")
+                        ImGui.TableNextColumn()
+                        ImGui.TextColored(ImVec4(0.983, 0.729, 0.290, 1.000), "%d Pts", (TrackXP.PlayerAA - startAA))
+                        ImGui.SameLine()
+                        ImGui.TextColored(ImVec4(0, 1, 0, 1), "%2.3f%% AA Xp", (OnEmu and TrackXP.AAExperience.Total or TrackXP.AAExperience.Total / TrackXP.XPTotalDivider / 100))
+                        ImGui.TableNextColumn()
+                        ImGui.Text("current AA / Min")
+                        ImGui.TableNextColumn()
+                        ImGui.Text("%2.2f%%", AAXPPerSecond * 60)
+                        ImGui.TableNextColumn()
+                        ImGui.Text("current AA / Hr")
+                        ImGui.TableNextColumn()
+                        ImGui.Text("%2.1f Pts", (AAXPPerSecond * 3600) / 100)
+                        ImGui.TableNextColumn()
+                        ImGui.Text("Time To AA")
+                        ImGui.TableNextColumn()
+                        ImGui.TextColored(ImVec4(0.983, 0.729, 0.290, 1.000), "%s", TimeToAA)
+                    end
+                else
+                    ImGui.TableNextColumn()
+                    ImGui.Text("waiting for data...")
+                    ImGui.TableNextColumn()
+                    ImGui.Text(string.format("%s", MinTime - (getTime() - TrackXP.StartTime)))
                 end
-            else
-                ImGui.TableNextColumn()
-                ImGui.Text("waiting for data...")
-                ImGui.TableNextColumn()
-                ImGui.Text(string.format("%s", MinTime - (getTime() - TrackXP.StartTime)))
+                ImGui.EndTable()
             end
-            ImGui.EndTable()
+
+            local ordMagDiff = 10 ^
+                math.floor(math.abs(math.log(
+                    (CurMaxExpPerSec > 0 and CurMaxExpPerSec or 1) / (GoalMaxExpPerSec > 0 and GoalMaxExpPerSec or 1), 10)))
+
+            -- converge on new max recalc min and maxes
+            if CurMaxExpPerSec < GoalMaxExpPerSec then
+                CurMaxExpPerSec = CurMaxExpPerSec + ordMagDiff
+            end
+
+            if CurMaxExpPerSec > GoalMaxExpPerSec then
+                CurMaxExpPerSec = CurMaxExpPerSec - ordMagDiff
+            end
         end
-
-        local ordMagDiff = 10 ^
-            math.floor(math.abs(math.log(
-                (CurMaxExpPerSec > 0 and CurMaxExpPerSec or 1) / (GoalMaxExpPerSec > 0 and GoalMaxExpPerSec or 1), 10)))
-
-        -- converge on new max recalc min and maxes
-        if CurMaxExpPerSec < GoalMaxExpPerSec then
-            CurMaxExpPerSec = CurMaxExpPerSec + ordMagDiff
-        end
-
-        if CurMaxExpPerSec > GoalMaxExpPerSec then
-            CurMaxExpPerSec = CurMaxExpPerSec - ordMagDiff
-        end
-
         if ImGui.CollapsingHeader("XP Plot") then
             if ImPlot.BeginPlot("Experience Tracker") then
                 ImPlot.SetupAxisScale(ImAxis.X1, ImPlotScale.Time)
