@@ -550,7 +550,7 @@ local function GiveTime()
         AAXPPerSecond          = ((TrackXP.AAExperience.Total - PrevAATotal) / XPTotalDivider) / horizon_or_less
 
         AAXPPerSecond          = AAXPPerSecond / (OnEmu and 1 or 100) -- divide by 100 to get full AA, not % values
-        SecondsToLevel         = XPToNextLevel / (XPPerSecond * XPTotalDivider)
+        SecondsToLevel         = XPToNextLevel / (XPPerSecond * XPTotalDivider) / ((XPTotalPerLevel / XPTotalDivider) / 100)
         TimeToLevel            = XPPerSecond <= 0 and "<Unknown>" or FormatTime(SecondsToLevel, "%d Days %d Hours %d Mins")
 
         local XPToNextAA       = 100 - mq.TLO.Me.PctAAExp()
