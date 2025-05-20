@@ -1,48 +1,89 @@
 -- Sample Performance Monitor Class Module
--- shamelessly ripped from RGMercs Lua
--- as suggested by Derple
-
--- V1.2 Exp Horizon
+-- Refactored to use SQLite database for XP data storage and display.
 
 local mq                   = require('mq')
 local ImGui                = require('ImGui')
 local ImPlot               = require('ImPlot')
 local ScrollingPlotBuffer  = require('utils.scrolling_plot_buffer')
-local OnEmu                = (mq.TLO.MacroQuest.BuildName():lower() or "") == "emu"
+local db_utils             = require('db_utils') -- Added for database interaction
 
-local XPEvents             = {}
-local MaxStep              = 50
-local GoalMaxExpPerSec     = 0
-local CurMaxExpPerSec      = 0
+-- Database Path (should match xp_collector.lua)
+local db_path = "xp_data.sqlite"
+local db -- Database connection object
+
+-- --- Database Initialization ---
+local function connect_and_init_db()
+    db = db_utils.get_db_connection(db_path)
+    if not db then
+        if mq and mq.printf then
+            mq.printf("\20XPTrackUI: \arFatal Error: Could not connect to database at %s.", db_path)
+        else
+            print("XPTrackUI: Fatal Error: Could not connect to database at " .. db_path .. ".")
+        end
+        return false
+    end
+
+    local ok, err_msg = db_utils.init_db(db) -- Ensures table exists
+    if not ok then
+        if mq and mq.printf then
+            mq.printf("\20XPTrackUI: \arWarning: Could not initialize database: %s.", err_msg or "Unknown error")
+        else
+            print("XPTrackUI: Warning: Could not initialize database: " .. (err_msg or "Unknown error") .. ".")
+        end
+        -- Continue anyway, as collector might create it.
+    end
+    if mq and mq.printf then
+        mq.printf("\20XPTrackUI: \agDatabase connection successful for UI.")
+    else
+        print("XPTrackUI: Database connection successful for UI.")
+    end
+    return true
+end
+
+-- Attempt to connect to DB on script start
+if not connect_and_init_db() then
+    -- If connection fails, UI might be limited. Could decide to exit or run with limited functionality.
+    -- For now, will allow script to continue, but plotting will fail.
+    mq.printf("\20XPTrackUI: \arDB connection failed. UI will be non-functional for data display.")
+end
+
+
+-- local OnEmu                = (mq.TLO.MacroQuest.BuildName():lower() or "") == "emu" -- Keep for now if any UI elements depend on it
+
+-- Old XP Tracking Logic - To be removed or refactored
+-- local XPEvents             = {} -- Will be re-purposed for DB data
+local MaxStep              = 50 -- May be useful for plot scaling
+local CurMaxExpPerSec      = 0  -- Will be determined by fetched data
+local GoalMaxExpPerSec     = 0  -- Will be determined by fetched data
 local LastExtentsCheck     = 0
-local LastEntry            = 0
-local XPPerSecond          = 0
-local AAXPPerSecond        = 0
-local PrevXPTotal          = 0
-local PrevAATotal          = 0
+-- local LastEntry            = 0
+-- local XPPerSecond          = 0 -- To be derived from DB
+-- local AAXPPerSecond        = 0 -- To be derived from DB
+-- local PrevXPTotal          = 0
+-- local PrevAATotal          = 0
 
-local XPTotalPerLevel      = OnEmu and 330 or 100000
-local XPTotalDivider       = OnEmu and 1 or 1000
+-- local XPTotalPerLevel      = OnEmu and 330 or 100000
+-- local XPTotalDivider       = OnEmu and 1 or 1000
 
-local startXP              = OnEmu and mq.TLO.Me.PctExp() or (mq.TLO.Me.Exp() / XPTotalDivider)
-local startLvl             = mq.TLO.Me.Level()
-local startAAXP            = OnEmu and mq.TLO.Me.PctAAExp() or (mq.TLO.Me.AAExp() / XPTotalDivider)
-local startAA              = mq.TLO.Me.AAPointsTotal()
+-- local startXP              = OnEmu and mq.TLO.Me.PctExp() or (mq.TLO.Me.Exp() / XPTotalDivider)
+-- local startLvl             = mq.TLO.Me.Level()
+-- local startAAXP            = OnEmu and mq.TLO.Me.PctAAExp() or (mq.TLO.Me.AAExp() / XPTotalDivider)
+-- local startAA              = mq.TLO.Me.AAPointsTotal()
 
-local XPToNextLevel        = 0
-local SecondsToLevel       = 0
-local SecondsToAA          = 0
-local TimeToLevel          = "<Unknown>"
-local TimeToAA             = "<Unknown>"
-local Resolution           = 15   -- seconds
-local MaxExpSecondsToStore = 3600 --3600
-local MaxHorizon           = 3600 --3600
-local MinTime              = 30
+-- local XPToNextLevel        = 0
+-- local SecondsToLevel       = 0
+-- local SecondsToAA          = 0
+-- local TimeToLevel          = "<Unknown>" -- To be derived or removed
+-- local TimeToAA             = "<Unknown>" -- To be derived or removed
+local Resolution           = 15   -- seconds, may not be relevant for DB display
+local MaxExpSecondsToStore = 3600 -- Default for live view window
+local MaxHorizon           = 3600
+-- local MinTime              = 30 -- For waiting for initial data, less relevant now
 
-local offset               = 1
-local horizon_or_less      = 60
-local trackback            = 1
-local first_tick           = 0
+-- local offset               = 1
+-- local horizon_or_less      = 60
+-- local trackback            = 1
+-- local first_tick           = 0
 
 local ImGui_HorizonStep1   = 1 * 60
 local ImGui_HorizonStep2   = 5 * 60
@@ -51,303 +92,502 @@ local ImGui_HorizonStep4   = 60 * 60
 
 local debug                = false
 
--- timezone calcs
+-- timezone calcs (keep for converting timestamps from DB if needed, or for historical input)
 ---@diagnostic disable-next-line: param-type-mismatch
-local utc_now              = os.time(os.date("!*t", os.time()))
+local utc_now_os_time      = os.time(os.date("!*t", os.time()))
 ---@diagnostic disable-next-line: param-type-mismatch
-local local_now            = os.time(os.date("*t", os.time()))
-local utc_offset           = local_now - utc_now
+local local_now_os_time    = os.time(os.date("*t", os.time()))
+local utc_offset           = local_now_os_time - utc_now_os_time
 
--- Check if we're currently in daylight saving time
-local dst                  = os.date("*t", os.time())["isdst"]
-
--- If we're in DST, add one hour
-if dst then
+if os.date("*t", os.time())["isdst"] then
     utc_offset = utc_offset + 3600
 end
 
-local function getTime()
-    return os.time() + utc_offset
+-- This function converts a UTC timestamp (from DB) to local time for plotting
+local function utc_to_local(utc_timestamp)
+    return utc_timestamp - utc_offset
 end
 
-local TrackXP       = {
-    PlayerLevel = mq.TLO.Me.Level() or 0,
-    PlayerAA = mq.TLO.Me.AAPointsTotal(),
-    StartTime = getTime(),
+-- This function converts a local timestamp (e.g. from ImGui date input) to UTC for DB query
+local function local_to_utc(local_timestamp)
+    return local_timestamp + utc_offset
+end
 
-    XPTotalPerLevel = OnEmu and 330 or 100000,
-    XPTotalDivider = OnEmu and 1 or 1000,
+-- Gets current local time for plot limits
+local function get_current_local_time()
+    return os.time()
+end
 
-    Experience = {
-        Base = OnEmu and ((mq.TLO.Me.Level() * 100) + mq.TLO.Me.PctExp()) or mq.TLO.Me.Exp(),
-        Total = 0,
-        Gained = 0,
-    },
-    AAExperience = {
-        Base = OnEmu and ((mq.TLO.Me.AAPointsTotal() * 100) + mq.TLO.Me.PctAAExp()) or mq.TLO.Me.AAExp(),
-        Total = 0,
-        Gained = 0,
-    },
-}
+
+-- Old TrackXP table - REMOVE
+-- local TrackXP       = {
+--     PlayerLevel = mq.TLO.Me.Level() or 0,
+--     PlayerAA = mq.TLO.Me.AAPointsTotal(),
+--     StartTime = getTime(), -- Old getTime, now use get_current_local_time or direct os.time()
+
+--     XPTotalPerLevel = OnEmu and 330 or 100000,
+--     XPTotalDivider = OnEmu and 1 or 1000,
+
+--     Experience = {
+--         Base = OnEmu and ((mq.TLO.Me.Level() * 100) + mq.TLO.Me.PctExp()) or mq.TLO.Me.Exp(),
+--         Total = 0,
+--         Gained = 0,
+--     },
+--     AAExperience = {
+--         Base = OnEmu and ((mq.TLO.Me.AAPointsTotal() * 100) + mq.TLO.Me.PctAAExp()) or mq.TLO.Me.AAExp(),
+--         Total = 0,
+--         Gained = 0,
+--     },
+-- }
 
 local settings      = {}
-HorizonChanged      = false --
+local HorizonChanged      = false -- Keep for UI interaction
 
 local DefaultConfig = {
-    ['ExpSecondsToStore'] = MaxExpSecondsToStore,
-    ['Horizon']           = ImGui_HorizonStep2,
+    ['ExpSecondsToStore'] = MaxExpSecondsToStore, -- This will be settings.Horizon
+    ['Horizon']           = ImGui_HorizonStep2,   -- Default live view duration
     ['ExpPlotFillLines']  = true,
     ['GraphMultiplier']   = 1,
 }
+settings = DefaultConfig
+local multiplier    = tonumber(settings.GraphMultiplier) -- Keep for plot rendering
 
-settings            = DefaultConfig
+-- New state variables for UI
+local selected_server_name = ""
+local selected_character_name = ""
+local available_profiles = {} -- table of {server="...", char="..."}
+local profile_names_for_dropdown = {} -- table of "char@server"
+local current_profile_index = 0 -- ImGui combo uses 0-based index in Lua
 
-local multiplier    = tonumber(settings.GraphMultiplier)
+-- Historical View UI State
+local historical_start_time_input = {year=os.date("*t").year, month=os.date("*t").month, day=os.date("*t").day, hour=0, min=0, sec=0}
+local historical_end_time_input = {year=os.date("*t").year, month=os.date("*t").month, day=os.date("*t").day, hour=23, min=59, sec=59}
+local historical_data_granularity = 60 -- Default to 1-min for historical, will be auto-adjusted
+local view_mode = "live" -- "live" or "historical"
+local historical_plot_start_time_epoch = 0 -- Store epoch time for plot limits
+local historical_plot_end_time_epoch = 0   -- Store epoch time for plot limits
 
+-- Buffers for plot data (will be populated from DB queries)
+local XPEvents = {
+    Exp = { expEvents = ScrollingPlotBuffer:new(math.ceil(2 * MaxHorizon)) }, -- TODO: Adjust size or handling based on DB data
+    AA  = { expEvents = ScrollingPlotBuffer:new(math.ceil(2 * MaxHorizon)) }  -- TODO: Adjust size or handling based on DB data
+}
+-- ClearStats function - to be refactored or removed
+-- For now, it might clear selected profile and plot data
 local function ClearStats()
-    TrackXP   = {
-        PlayerLevel = mq.TLO.Me.Level(),
-        PlayerAA = mq.TLO.Me.AAPointsTotal(),
-        StartTime = getTime(),
-
-        Experience = {
-            Base = OnEmu and ((mq.TLO.Me.Level() * 100) + mq.TLO.Me.PctExp()) or mq.TLO.Me.Exp(),
-            Total = 0,
-            Gained = 0,
-        },
-        AAExperience = {
-            Base = OnEmu and ((mq.TLO.Me.AAPointsTotal() * 100) + mq.TLO.Me.PctAAExp()) or mq.TLO.Me.AAExp(),
-            Total = 0,
-            Gained = 0,
-        },
-    }
-    startXP   = OnEmu and (mq.TLO.Me.PctExp()) or (mq.TLO.Me.Exp() / XPTotalDivider)
-    startLvl  = mq.TLO.Me.Level()
-    startAAXP = OnEmu and (mq.TLO.Me.PctAAExp()) or (mq.TLO.Me.AAExp() / XPTotalDivider)
-    startAA   = mq.TLO.Me.AAPointsTotal()
-    XPEvents  = {}
+    -- TrackXP related reset is removed
+    -- startXP, startLvl, etc. are removed
+    if XPEvents.Exp and XPEvents.Exp.expEvents then XPEvents.Exp.expEvents:Clear() end
+    if XPEvents.AA and XPEvents.AA.expEvents then XPEvents.AA.expEvents:Clear() end
+    -- selected_server_name = "" -- Don't reset profile selection on "Reset Stats" for now
+    -- selected_character_name = ""
+    -- current_profile_index = 0
+    if mq and mq.printf then mq.printf("\20XPTrackUI: \agPlot data cleared.") end
 end
 
-local function RenderShaded(type, currentData, otherData)
-    if currentData then
-        local count = #currentData.expEvents.DataY
-        local otherY = {}
-        local now = getTime()
-        if settings.ExpPlotFillLines then
-            for idx, _ in ipairs(currentData.expEvents.DataY) do
-                otherY[idx] = 0
-                if otherData.expEvents.DataY[idx] then
-                    if currentData.expEvents.DataY[idx] >= otherData.expEvents.DataY[idx] then
-                        otherY[idx] = otherData.expEvents.DataY[idx]
-                    end
+local function RenderShaded(type, currentDataBuffer, otherDataBuffer)
+    -- This function expects currentData.expEvents to be a ScrollingPlotBuffer instance
+    -- Or at least have DataX, DataY, Offset fields.
+    -- Needs to be adapted if the structure of XPEvents changes significantly.
+    if not currentDataBuffer or not currentDataBuffer.expEvents or not currentDataBuffer.expEvents.DataY then
+        return
+    end
+
+    local count = #currentDataBuffer.expEvents.DataY
+    if count == 0 then return end
+
+    local otherY = {}
+    if settings.ExpPlotFillLines then
+        for idx = 1, count do
+            otherY[idx] = 0
+            if otherDataBuffer and otherDataBuffer.expEvents and otherDataBuffer.expEvents.DataY and otherDataBuffer.expEvents.DataY[idx] then
+                if currentDataBuffer.expEvents.DataY[idx] >= otherDataBuffer.expEvents.DataY[idx] then
+                    otherY[idx] = otherDataBuffer.expEvents.DataY[idx]
                 end
             end
-            ImPlot.PlotShaded(type, currentData.expEvents.DataX, currentData.expEvents.DataY, otherY, count,
-                ImPlotShadedFlags.None, currentData.expEvents.Offset - 1)
         end
-
-        ImPlot.PlotLine(type, currentData.expEvents.DataX, currentData.expEvents.DataY, count, ImPlotLineFlags.None,
-            currentData.expEvents.Offset - 1)
+        -- The offset in ScrollingPlotBuffer is 1-based for Lua arrays.
+        ImPlot.PlotShaded(type, currentDataBuffer.expEvents.DataX, currentDataBuffer.expEvents.DataY, otherY, count,
+            ImPlotShadedFlags.None, currentDataBuffer.expEvents.Offset -1)
     end
+
+    ImPlot.PlotLine(type, currentDataBuffer.expEvents.DataX, currentDataBuffer.expEvents.DataY, count, ImPlotLineFlags.None,
+        currentDataBuffer.expEvents.Offset -1)
 end
 
 local openGUI = true
 local shouldDrawGUI = true
 
-local function FormatTime(time, formatString)
-    local days = math.floor(time / 86400)
-    local hours = math.floor((time % 86400) / 3600)
-    local minutes = math.floor((time % 3600) / 60)
-    local seconds = math.floor((time % 60))
+local function FormatTime(time_in_seconds, formatString)
+    if not time_in_seconds or time_in_seconds < 0 then return "N/A" end
+    local days = math.floor(time_in_seconds / 86400)
+    local hours = math.floor((time_in_seconds % 86400) / 3600)
+    local minutes = math.floor((time_in_seconds % 3600) / 60)
+    local seconds = math.floor((time_in_seconds % 60))
     return string.format(formatString and formatString or "%d:%02d:%02d:%02d", days, hours, minutes, seconds)
 end
+
+
+-- --- Server/Character Selection ---
+function get_profiles(db_conn)
+    if not db_conn then return {} end
+    local profiles = {}
+    local distinct_profiles = {} -- To ensure uniqueness before adding to `profiles`
+    local sql = "SELECT DISTINCT server_name, character_name FROM xp_data ORDER BY server_name, character_name;"
+    local stmt, err = db_conn:prepare(sql)
+    if not stmt then
+        if mq and mq.printf then mq.printf("\20XPTrackUI: \arError preparing profiles query: %s", err or db_conn:errmsg()) end
+        return profiles
+    end
+
+    for server, char in stmt:nrows() do
+        local profile_key = string.format("%s@%s", char, server)
+        if not distinct_profiles[profile_key] then
+            table.insert(profiles, {server = server, char = char})
+            distinct_profiles[profile_key] = true
+        end
+    end
+    stmt:finalize()
+    return profiles
+end
+
+local function refresh_available_profiles()
+    if not db then return end
+    available_profiles = get_profiles(db)
+    profile_names_for_dropdown = {}
+    for _, p in ipairs(available_profiles) do
+        table.insert(profile_names_for_dropdown, string.format("%s @ %s", p.char, p.server))
+    end
+    -- If current selection is no longer valid, reset it
+    local current_selection_valid = false
+    for i, p_name in ipairs(profile_names_for_dropdown) do
+        if selected_character_name ~= "" and selected_server_name ~= "" and p_name == string.format("%s @ %s", selected_character_name, selected_server_name) then
+            current_profile_index = i -1 -- Adjust to 0-based for ImGui
+            current_selection_valid = true
+            break
+        end
+    end
+    if not current_selection_valid then
+        selected_character_name = ""
+        selected_server_name = ""
+        current_profile_index = 0
+        if #available_profiles > 0 then -- Auto-select first profile if available
+            selected_server_name = available_profiles[1].server
+            selected_character_name = available_profiles[1].char
+        end
+    end
+end
+
+-- --- Data Fetching Functions ---
+local live_data_last_fetch_time = 0
+local live_data_fetch_interval = 10 -- seconds
+
+function fetch_recent_data(db_conn, server, char, duration_seconds)
+    if not db_conn or not server or server == "" or not char or char == "" then return {} end
+    local results = {}
+    -- Timestamps in DB are UTC. Plotting will convert them to local time.
+    local start_utc_time = (get_current_local_time() - duration_seconds) + utc_offset -- Convert local start to UTC for query
+
+    local sql = string.format(
+        "SELECT timestamp, xp_gain, aa_xp_gain FROM xp_data WHERE server_name = '%s' AND character_name = '%s' AND granularity = 60 AND timestamp >= %d ORDER BY timestamp ASC;",
+        server:gsub("'", "''"), -- basic SQL injection prevention
+        char:gsub("'", "''"),   -- basic SQL injection prevention
+        start_utc_time
+    )
+
+    local stmt, err = db_conn:prepare(sql)
+    if not stmt then
+        if mq and mq.printf then mq.printf("\20XPTrackUI: \arError preparing recent data query: %s", err or db_conn:errmsg()) end
+        return results
+    end
+
+    for timestamp, xp_gain, aa_xp_gain in stmt:nrows() do
+        table.insert(results, {timestamp = timestamp, xp_gain = xp_gain, aa_xp_gain = aa_xp_gain})
+    end
+    stmt:finalize()
+    return results
+end
+
+function fetch_historical_data(db_conn, server, char, start_utc_timestamp, end_utc_timestamp)
+    if not db_conn or not server or server == "" or not char or char == "" then return {}, 60 end
+
+    local results = {}
+    local query_granularity = 60
+    local time_range_seconds = end_utc_timestamp - start_utc_timestamp
+
+    if time_range_seconds <= 0 then return results, query_granularity end
+
+    -- Choose granularity based on range
+    if time_range_seconds > (14 * 24 * 60 * 60) then -- More than 14 days
+        query_granularity = 3600 -- 1 hour
+    elseif time_range_seconds > (2 * 24 * 60 * 60) then -- More than 2 days
+        query_granularity = 1800 -- 30 minutes
+    else -- Default to 1 minute for shorter ranges
+        query_granularity = 60
+    end
+
+    local sql = string.format(
+        "SELECT timestamp, xp_gain, aa_xp_gain, granularity FROM xp_data WHERE server_name = '%s' AND character_name = '%s' AND granularity = %d AND timestamp >= %d AND timestamp <= %d ORDER BY timestamp ASC;",
+        server:gsub("'", "''"),
+        char:gsub("'", "''"),
+        query_granularity,
+        start_utc_timestamp,
+        end_utc_timestamp
+    )
+
+    local stmt, err = db_conn:prepare(sql)
+    if not stmt then
+        if mq and mq.printf then mq.printf("\20XPTrackUI: \arError preparing historical data query: %s", err or db_conn:errmsg()) end
+        return results, query_granularity
+    end
+    for timestamp, xp_gain, aa_xp_gain, gran in stmt:nrows() do
+        table.insert(results, {timestamp = timestamp, xp_gain = xp_gain, aa_xp_gain = aa_xp_gain, granularity = gran})
+    end
+    stmt:finalize()
+    return results, query_granularity
+end
+
+local function update_plot_data(data_points, target_buffer, data_type)
+    -- data_type can be "xp" or "aa"
+    -- data_points is an array of {timestamp = UTC_ts, xp_gain = val, aa_xp_gain = val, granularity = (optional, from historical)}
+    if not target_buffer or not target_buffer.expEvents then return end
+    target_buffer.expEvents:Clear() -- Clear old data
+
+    local max_y_val = 0
+
+    for _, point in ipairs(data_points) do
+        local y_value = 0
+        local point_granularity = point.granularity or 60 -- Assume 60s if not specified (live data)
+
+        if data_type == "xp" then
+            y_value = (point.xp_gain or 0)
+        elseif data_type == "aa" then
+            y_value = (point.aa_xp_gain or 0)
+        end
+
+        -- Convert Y value to rate (per hour, matching old logic for display scaling)
+        -- Old logic: XPPerSecond * 60 * 60 * multiplier
+        -- New logic: (XP_gained_in_interval / interval_seconds) * 3600
+        if point_granularity > 0 then
+            y_value = (y_value / point_granularity) * 3600
+        else
+            y_value = 0 -- Avoid division by zero if granularity is bad
+        end
+
+        if data_type == "xp" then
+             y_value = y_value * multiplier -- Apply multiplier only for regular XP
+        end
+
+        -- Timestamps from DB are UTC. Convert to local for plotting.
+        target_buffer.expEvents:AddPoint(utc_to_local(point.timestamp), y_value, 0) -- Third param (total) not used from DB like this.
+
+        if y_value > max_y_val then max_y_val = y_value end
+    end
+    return max_y_val
+end
+
+local current_plot_max_y = 100 -- Default, will be adjusted
 
 local function DrawMainWindow()
     if not openGUI then return end
     openGUI, shouldDrawGUI = ImGui.Begin('xpTrack', openGUI)
 
     if shouldDrawGUI then
-        ImGui.SameLine()
-        local pressed
-        local waitfordata = (getTime() - TrackXP.StartTime) <= MinTime
-        if ImGui.Button("Reset Stats", ImGui.GetWindowWidth() * .3, 25) then
-            ClearStats()
+        -- Profile Selection
+        if ImGui.Button("Refresh Profiles") or #available_profiles == 0 then
+            refresh_available_profiles()
         end
         ImGui.SameLine()
-        ImGui.TextColored(ImVec4(0, 1, 1, 1), "Current ")
-        ImGui.SameLine()
-        ImGui.TextColored(ImVec4(0.352, 0.970, 0.399, 1.000), "XP: %2.3f%%", mq.TLO.Me.PctExp())
-        if TrackXP.PlayerLevel >= 51 then
-            ImGui.SameLine()
-            ImGui.TextColored(ImVec4(0.983, 0.729, 0.290, 1.000), "  AA XP: %2.3f%% ", mq.TLO.Me.PctAAExp())
+        if #profile_names_for_dropdown > 0 then
+            local selected_idx_before = current_profile_index
+            current_profile_index = ImGui.Combo("Profile", current_profile_index, profile_names_for_dropdown)
+            if selected_idx_before ~= current_profile_index or selected_character_name == "" then
+                if available_profiles[current_profile_index + 1] then
+                    selected_server_name = available_profiles[current_profile_index + 1].server
+                    selected_character_name = available_profiles[current_profile_index + 1].char
+                    live_data_last_fetch_time = 0 -- Force fetch for new profile
+                    if mq and mq.printf then mq.printf("\20XPTrackUI: \agProfile selected: %s @ %s", selected_character_name, selected_server_name) end
+                end
+            end
+        else
+            ImGui.Text("No profiles found in database.")
         end
+
+        ImGui.SameLine()
+        if ImGui.Button("Reset Plot", ImGui.GetWindowWidth() * .3, 25) then -- Old "Reset Stats"
+            ClearStats() -- Clears plot data
+        end
+        -- ImGui.SameLine()
+        -- ImGui.TextColored(ImVec4(0, 1, 1, 1), "Current ") -- Current live MQ TLO PctExp/PctAAExp removed for now
+        -- ImGui.SameLine()
+        -- ImGui.TextColored(ImVec4(0.352, 0.970, 0.399, 1.000), "XP: %2.3f%%", mq.TLO.Me.PctExp())
+        -- if mq.TLO.Me.Level() >= 51 then
+        --     ImGui.SameLine()
+        --     ImGui.TextColored(ImVec4(0.983, 0.729, 0.290, 1.000), "  AA XP: %2.3f%% ", mq.TLO.Me.PctAAExp())
+        -- end
+
         if ImGui.CollapsingHeader("Exp Stats") then
             if ImGui.BeginTable("ExpStats", 2, bit32.bor(ImGuiTableFlags.Borders)) then
-                if not waitfordata then
-                    -- wait for MinTime
-                    ImGui.TableNextColumn()
-                    ImGui.Text("Exp Session Time")
-                    ImGui.TableNextColumn()
-                    ImGui.Text(FormatTime(getTime() - TrackXP.StartTime))
-                    ImGui.TableNextColumn()
-                    ImGui.Text("Exp Horizon Time")
-                    ImGui.TableNextColumn()
-                    ImGui.Text(FormatTime(settings.Horizon))
-                    -- XP Section
-                    ImGui.TableNextColumn()
-                    ImGui.TextColored(ImVec4(1, 1, 0, 1), "Exp Start value")
-                    ImGui.TableNextColumn()
-                    ImGui.TextColored(ImVec4(1, 1, 0, 1), "Lvl: ")
-                    ImGui.SameLine()
-                    ImGui.TextColored(ImVec4(0, 1, 1, 1), "%d ", startLvl)
-                    ImGui.SameLine()
-                    ImGui.TextColored(ImVec4(1, 1, 0, 1), "XP: ")
-                    ImGui.SameLine()
-                    ImGui.TextColored(ImVec4(0, 1, 1, 1), "%2.3f%%", startXP)
-                    ImGui.TableNextColumn()
-                    ImGui.Text("Exp Gained")
-                    ImGui.TableNextColumn()
-                    local color = TrackXP.Experience.Total > 0 and ImVec4(0, 1, 0, 1) or ImVec4(1, 0, 0, 1)
-                    ImGui.TextColored(ImVec4(0.983, 0.729, 0.290, 1.000), "%d Lvls ", (TrackXP.PlayerLevel - startLvl))
-                    ImGui.SameLine()
-                    ImGui.TextColored(color, "%2.3f%% Xp", (OnEmu and TrackXP.Experience.Total or TrackXP.Experience.Total / XPTotalDivider))
-                    ImGui.TableNextColumn()
-                    ImGui.Text("current Exp / Min")
-                    ImGui.TableNextColumn()
-                    ImGui.Text("%2.3f%%", XPPerSecond * 60)
-                    ImGui.TableNextColumn()
-                    ImGui.Text("current Exp / Hr")
-                    ImGui.TableNextColumn()
-                    ImGui.Text("%2.3f%%", XPPerSecond * 3600)
-                    ImGui.TableNextColumn()
-                    ImGui.Text("Time To Level")
-                    ImGui.TableNextColumn()
-                    ImGui.TextColored(ImVec4(0.983, 0.729, 0.290, 1.000), "%s", TimeToLevel)
-                    -- AA Section
-                    if TrackXP.PlayerLevel >= 51 then
-                        ImGui.TableNextColumn()
-                        ImGui.TextColored(ImVec4(1, 1, 0, 1), "AA Start value")
-                        ImGui.TableNextColumn()
-                        ImGui.TextColored(ImVec4(1, 1, 0, 1), "Pts: ")
-                        ImGui.SameLine()
-                        ImGui.TextColored(ImVec4(0, 1, 1, 1), "%d ", startAA)
-                        ImGui.SameLine()
-                        ImGui.TextColored(ImVec4(1, 1, 0, 1), "AA XP: ")
-                        ImGui.SameLine()
-                        ImGui.TextColored(ImVec4(0, 1, 1, 1), "%2.3f%%", startAAXP)
-                        ImGui.TableNextColumn()
-                        ImGui.Text("AA Gained")
-                        ImGui.TableNextColumn()
-                        ImGui.TextColored(ImVec4(0.983, 0.729, 0.290, 1.000), "%d Pts", (TrackXP.PlayerAA - startAA))
-                        ImGui.SameLine()
-                        ImGui.TextColored(ImVec4(0, 1, 0, 1), "%2.3f%% AA Xp", (OnEmu and TrackXP.AAExperience.Total or TrackXP.AAExperience.Total / XPTotalDivider / 100))
-                        if not OnEmu then
-                            ImGui.TableNextColumn()
-                            ImGui.Text("current AA / Min")
-                            ImGui.TableNextColumn()
-                            ImGui.Text("%2.1f Pts", AAXPPerSecond * 60)
-                            ImGui.TableNextColumn()
-                            ImGui.Text("current AA / Hr")
-                            ImGui.TableNextColumn()
-                            ImGui.Text("%2.1f Pts", AAXPPerSecond * 3600)
-                        else
-                            ImGui.TableNextColumn()
-                            ImGui.Text("current AA / Min")
-                            ImGui.TableNextColumn()
-                            ImGui.Text("%2.1f%%", AAXPPerSecond * 60)
-                            ImGui.TableNextColumn()
-                            ImGui.Text("current AA / Hr")
-                            ImGui.TableNextColumn()
-                            ImGui.Text("%2.1f Pts", AAXPPerSecond * 36)
-                        end
-                        ImGui.TableNextColumn()
-                        ImGui.Text("Time To AA")
-                        ImGui.TableNextColumn()
-                        ImGui.TextColored(ImVec4(0.983, 0.729, 0.290, 1.000), "%s", TimeToAA)
-                    end
-                else
-                    ImGui.TableNextColumn()
-                    ImGui.Text("waiting for data...")
-                    ImGui.TableNextColumn()
-                    ImGui.Text(string.format("%s", MinTime - (getTime() - TrackXP.StartTime)))
-                end
+                -- This section needs complete rework based on what data we can show from DB
+                ImGui.TableNextColumn(); ImGui.Text("Selected Profile:");
+                ImGui.TableNextColumn(); ImGui.Text("%s @ %s", selected_character_name, selected_server_name)
+
+                ImGui.TableNextColumn(); ImGui.Text("Data Window (Live):");
+                ImGui.TableNextColumn(); ImGui.Text(FormatTime(settings.Horizon))
+
+                -- Add more stats here if derived from fetched data later
                 ImGui.EndTable()
             end
-
-            local ordMagDiff = 10 ^
-                math.floor(math.abs(math.log(
-                    (CurMaxExpPerSec > 0 and CurMaxExpPerSec or 1) / (GoalMaxExpPerSec > 0 and GoalMaxExpPerSec or 1), 10)))
-
-            -- converge on new max recalc min and maxes
-            if CurMaxExpPerSec < GoalMaxExpPerSec then
-                CurMaxExpPerSec = CurMaxExpPerSec + ordMagDiff
-            end
-
-            if CurMaxExpPerSec > GoalMaxExpPerSec then
-                CurMaxExpPerSec = CurMaxExpPerSec - ordMagDiff
-            end
         end
-        if ImGui.CollapsingHeader("XP Plot") then
+
+        if ImGui.CollapsingHeader("XP Plot (Live/Historical)") then
+            -- Fetch data for live view if profile selected and interval passed
+            if selected_character_name ~= "" and selected_server_name ~= "" then
+                 if get_current_local_time() - live_data_last_fetch_time > live_data_fetch_interval or HorizonChanged then
+                    if db then
+                        local recent_data = fetch_recent_data(db, selected_server_name, selected_character_name, settings.Horizon)
+                        local max_xp_y = update_plot_data(recent_data, XPEvents.Exp, "xp")
+                        local max_aa_y = update_plot_data(recent_data, XPEvents.AA, "aa")
+                        current_plot_max_y = math.max(max_xp_y, max_aa_y, 100) -- Ensure a minimum plot height
+                        GoalMaxExpPerSec = current_plot_max_y -- For dynamic Y axis scaling
+                        live_data_last_fetch_time = get_current_local_time()
+                        HorizonChanged = false
+                        if mq and mq.printf then mq.printf("\20XPTrackUI: \agFetched %d points for live view.", #recent_data) end
+                    else
+                        if mq and mq.printf then mq.printf("\20XPTrackUI: \arDB not connected, cannot fetch live data.") end
+                    end
+                end
+            end
+
             if ImPlot.BeginPlot("Experience Tracker") then
                 ImPlot.SetupAxisScale(ImAxis.X1, ImPlotScale.Time)
                 if multiplier == 1 then
-                    ImPlot.SetupAxes("Local Time", "Exp ")
+                    ImPlot.SetupAxes("Local Time", "Exp/AA per Hour")
                 else
-                    ImPlot.SetupAxes("Local Time", string.format("reg. Exp in %sths", multiplier))
+                    ImPlot.SetupAxes("Local Time", string.format("Exp (x%s) / AA per Hour", multiplier))
                 end
-                if not waitfordata then
-                    ImPlot.SetupAxisLimits(ImAxis.X1, getTime() - settings.ExpSecondsToStore, getTime(), ImGuiCond.Always)
-                    ImPlot.SetupAxisLimits(ImAxis.Y1, 1, CurMaxExpPerSec, ImGuiCond.Always)
-                    ImPlot.PushStyleVar(ImPlotStyleVar.FillAlpha, 0.35)
-                    RenderShaded("Exp", XPEvents.Exp, XPEvents.AA)
-                    RenderShaded("AA", XPEvents.AA, XPEvents.Exp)
-                    ImPlot.PopStyleVar()
+
+                -- Dynamic Y axis based on GoalMaxExpPerSec (calculated from fetched data)
+                if CurMaxExpPerSec < GoalMaxExpPerSec then CurMaxExpPerSec = CurMaxExpPerSec + (GoalMaxExpPerSec - CurMaxExpPerSec) * 0.1 end
+                if CurMaxExpPerSec > GoalMaxExpPerSec then CurMaxExpPerSec = CurMaxExpPerSec - (CurMaxExpPerSec - GoalMaxExpPerSec) * 0.1 end
+                if math.abs(CurMaxExpPerSec - GoalMaxExpPerSec) < 1 then CurMaxExpPerSec = GoalMaxExpPerSec end
+
+                local plot_start_time_to_use = get_current_local_time() - settings.Horizon
+                local plot_end_time_to_use = get_current_local_time()
+
+                if view_mode == "historical" and historical_plot_start_time_epoch > 0 and historical_plot_end_time_epoch > 0 then
+                    plot_start_time_to_use = historical_plot_start_time_epoch
+                    plot_end_time_to_use = historical_plot_end_time_epoch
+                    if ImGui.Button("Switch to Live View") then
+                        view_mode = "live"
+                        live_data_last_fetch_time = 0 -- Force refresh live data
+                    end
+                    ImGui.SameLine() -- Keep button on same line if possible
                 end
+
+                ImPlot.SetupAxisLimits(ImAxis.X1, plot_start_time_to_use, plot_end_time_to_use, ImGuiCond.Always)
+                ImPlot.SetupAxisLimits(ImAxis.Y1, 0, CurMaxExpPerSec > 0 and CurMaxExpPerSec or 100, ImGuiCond.Always)
+
+                ImPlot.PushStyleVar(ImPlotStyleVar.FillAlpha, 0.35)
+                RenderShaded("Exp", XPEvents.Exp, XPEvents.AA) -- RenderShaded expects .expEvents.DataX/Y/Offset
+                RenderShaded("AA", XPEvents.AA, XPEvents.Exp)
+                ImPlot.PopStyleVar()
                 ImPlot.EndPlot()
             end
         end
-        if ImGui.CollapsingHeader("Config Options") then
-            settings.ExpSecondsToStore, pressed = ImGui.SliderInt("Exp observation period",
-                settings.ExpSecondsToStore, 60, MaxExpSecondsToStore, "%d s")
 
+        if ImGui.CollapsingHeader("Historical Data View") then
+            ImGui.Text("Select Date and Time Range (Local Time)")
+            -- Using InputInt for date/time components
+            ImGui.InputInt("Year##Start", historical_start_time_input, "year") ImGui.SameLine()
+            ImGui.InputInt("Mon##Start", historical_start_time_input, "month") ImGui.SameLine()
+            ImGui.InputInt("Day##Start", historical_start_time_input, "day") ImGui.SameLine()
+            ImGui.InputInt("Hr##Start", historical_start_time_input, "hour") ImGui.SameLine()
+            ImGui.InputInt("Min##Start", historical_start_time_input, "min")
+
+            ImGui.InputInt("Year##End", historical_end_time_input, "year") ImGui.SameLine()
+            ImGui.InputInt("Mon##End", historical_end_time_input, "month") ImGui.SameLine()
+            ImGui.InputInt("Day##End", historical_end_time_input, "day") ImGui.SameLine()
+            ImGui.InputInt("Hr##End", historical_end_time_input, "hour") ImGui.SameLine()
+            ImGui.InputInt("Min##End", historical_end_time_input, "min")
+
+            if ImGui.Button("Fetch and Display Historical Data") then
+                if selected_character_name ~= "" and selected_server_name ~= "" then
+                    if db then
+                        -- Convert input local times to UTC timestamps
+                        local start_local_ts = os.time({
+                            year=historical_start_time_input.year, month=historical_start_time_input.month, day=historical_start_time_input.day,
+                            hour=historical_start_time_input.hour, min=historical_start_time_input.min, sec=0
+                        })
+                        local end_local_ts = os.time({
+                            year=historical_end_time_input.year, month=historical_end_time_input.month, day=historical_end_time_input.day,
+                            hour=historical_end_time_input.hour, min=historical_end_time_input.min, sec=59
+                        })
+
+                        if not start_local_ts or not end_local_ts then
+                             if mq and mq.printf then mq.printf("\20XPTrackUI: \arInvalid date/time input for historical view.") end
+                        else
+                            local start_utc_ts = local_to_utc(start_local_ts)
+                            local end_utc_ts = local_to_utc(end_local_ts)
+
+                            if mq and mq.printf then mq.printf("\20XPTrackUI: \agFetching historical data from %s to %s UTC", os.date("%Y-%m-%d %H:%M",start_utc_ts), os.date("%Y-%m-%d %H:%M",end_utc_ts)) end
+
+                            local historical_data, fetched_granularity = fetch_historical_data(db, selected_server_name, selected_character_name, start_utc_ts, end_utc_ts)
+                            historical_data_granularity = fetched_granularity
+
+                            local max_xp_y = update_plot_data(historical_data, XPEvents.Exp, "xp")
+                            local max_aa_y = update_plot_data(historical_data, XPEvents.AA, "aa")
+                            current_plot_max_y = math.max(max_xp_y, max_aa_y, 100)
+                            GoalMaxExpPerSec = current_plot_max_y
+                            
+                            view_mode = "historical" -- Switch to historical view mode
+                            historical_plot_start_time_epoch = start_local_ts -- Store for plot limits
+                            historical_plot_end_time_epoch = end_local_ts   -- Store for plot limits
+
+                            if mq and mq.printf then mq.printf("\20XPTrackUI: \agFetched %d historical points with granularity %d.", #historical_data, historical_data_granularity) end
+                        end
+                    else
+                        if mq and mq.printf then mq.printf("\20XPTrackUI: \arDB not connected, cannot fetch historical data.") end
+                    end
+                else
+                    if mq and mq.printf then mq.printf("\20XPTrackUI: \ayPlease select a profile first.") end
+                end
+            end
+            ImGui.Text("Data will be plotted with granularity: %d seconds", historical_data_granularity)
+        end
+
+
+        if ImGui.CollapsingHeader("Config Options") then
+            -- settings.ExpSecondsToStore, pressed = ImGui.SliderInt("Exp observation period",
+            --     settings.ExpSecondsToStore, 60, MaxExpSecondsToStore, "%d s")
+            -- if pressed then HorizonChanged = true end -- ExpSecondsToStore is now settings.Horizon
+
+            local old_horizon = settings.Horizon
+            settings.Horizon, pressed = ImGui.SliderInt("Live View Window (seconds)",
+                settings.Horizon, ImGui_HorizonStep1, ImGui_HorizonStep4, "%d s")
+            if pressed then
+                if settings.Horizon < ImGui_HorizonStep2 then settings.Horizon = ImGui_HorizonStep1
+                elseif settings.Horizon < ImGui_HorizonStep3 then settings.Horizon = ImGui_HorizonStep2
+                elseif settings.Horizon < ImGui_HorizonStep4 then settings.Horizon = ImGui_HorizonStep3
+                else settings.Horizon = ImGui_HorizonStep4
+                end
+                if old_horizon ~= settings.Horizon then HorizonChanged = true end
+            end
+
+
+            local old_multiplier = multiplier
             settings.GraphMultiplier, pressed = ImGui.SliderInt("Scaleup for regular XP",
                 settings.GraphMultiplier, 1, 20, "%d x")
             if pressed then
-                if settings.GraphMultiplier < 5 then
-                    settings.GraphMultiplier = 1
-                elseif settings.GraphMultiplier < 15 then
-                    settings.GraphMultiplier = 10
-                else
-                    settings.GraphMultiplier = 20
+                if settings.GraphMultiplier < 5 then settings.GraphMultiplier = 1
+                elseif settings.GraphMultiplier < 15 then settings.GraphMultiplier = 10
+                else settings.GraphMultiplier = 20
                 end
-
-                local new_multiplier = tonumber(settings.GraphMultiplier)
-
-                for idx, pt in ipairs(XPEvents.Exp.expEvents.DataY) do
-                    XPEvents.Exp.expEvents.DataY[idx] = (pt / multiplier) * new_multiplier
-                end
-
-                multiplier = new_multiplier
-            end
-
-            settings.Horizon, pressed = ImGui.SliderInt("Horizon for plot",
-                settings.Horizon, ImGui_HorizonStep1, ImGui_HorizonStep4, "%d s")
-            if pressed then
-                if settings.Horizon < ImGui_HorizonStep2 then
-                    settings.Horizon = ImGui_HorizonStep1
-                    HorizonChanged = true
-                elseif settings.Horizon < ImGui_HorizonStep3 then
-                    settings.Horizon = ImGui_HorizonStep2
-                    HorizonChanged = true
-                elseif settings.Horizon < ImGui_HorizonStep4 then
-                    settings.Horizon = ImGui_HorizonStep3
-                    HorizonChanged = true
-                else
-                    settings.Horizon = ImGui_HorizonStep4
-                    HorizonChanged = true
+                multiplier = tonumber(settings.GraphMultiplier)
+                if old_multiplier ~= multiplier then
+                    live_data_last_fetch_time = 0 -- Force refresh and recalculate Y values if multiplier changes
                 end
             end
-
             settings.ExpPlotFillLines = ImGui.Checkbox("Shade Plot Lines", settings.ExpPlotFillLines)
         end
     end
@@ -355,289 +595,65 @@ local function DrawMainWindow()
     ImGui.End()
 end
 
-local function CheckExpChanged()
-    local me = mq.TLO.Me
-    local currentExp = me.Exp()
-    if currentExp ~= TrackXP.Experience.Base then
-        if me.Level() == TrackXP.PlayerLevel then
-            TrackXP.Experience.Gained = currentExp - TrackXP.Experience.Base
-        elseif me.Level() > TrackXP.PlayerLevel then
-            TrackXP.Experience.Gained = XPTotalPerLevel - TrackXP.Experience.Base + currentExp
-        else
-            TrackXP.Experience.Gained = TrackXP.Experience.Base - XPTotalPerLevel + currentExp
-        end
-
-        TrackXP.Experience.Total = TrackXP.Experience.Total + TrackXP.Experience.Gained
-        TrackXP.Experience.Base = currentExp
-        TrackXP.PlayerLevel = me.Level()
-
-        return true
-    end
-
-    TrackXP.Experience.Gained = 0
-    return false
-end
-
-local function CheckAAExpChanged()
-    local me = mq.TLO.Me
-    local currentExp = me.AAExp()
-    if currentExp ~= TrackXP.AAExperience.Base then
-        if me.AAPointsTotal() == TrackXP.PlayerAA then
-            TrackXP.AAExperience.Gained = currentExp - TrackXP.AAExperience.Base
-        else
-            TrackXP.AAExperience.Gained = currentExp - TrackXP.AAExperience.Base +
-                ((me.AAPointsTotal() - TrackXP.PlayerAA) * XPTotalPerLevel)
-        end
-
-        TrackXP.AAExperience.Total = TrackXP.AAExperience.Total + TrackXP.AAExperience.Gained
-        TrackXP.AAExperience.Base = currentExp
-        TrackXP.PlayerAA = me.AAPointsTotal()
-
-        return true
-    end
-
-    TrackXP.AAExperience.Gained = 0
-    return false
-end
-
-local function CheckExpChangedEmu()
-    local me = mq.TLO.Me
-    local currentExp = ((me.Level() * 100) + me.PctExp())
-    if currentExp ~= TrackXP.Experience.Base then
-        TrackXP.Experience.Gained = currentExp - TrackXP.Experience.Base
-
-        TrackXP.Experience.Total = TrackXP.Experience.Total + TrackXP.Experience.Gained
-        TrackXP.Experience.Base = currentExp
-        TrackXP.PlayerLevel = me.Level()
-
-        return true
-    end
-
-    TrackXP.Experience.Gained = 0
-    return false
-end
-
-local function CheckAAExpChangedEmu()
-    local me = mq.TLO.Me
-    local currentExp = ((me.AAPointsTotal() * 100) + me.PctAAExp())
-    if currentExp ~= TrackXP.AAExperience.Base then
-        TrackXP.AAExperience.Gained = currentExp - TrackXP.AAExperience.Base
-
-        TrackXP.AAExperience.Total = TrackXP.AAExperience.Total + TrackXP.AAExperience.Gained
-        TrackXP.AAExperience.Base = currentExp
-        TrackXP.PlayerAA = me.AAPointsTotal()
-
-        return true
-    end
-
-    TrackXP.AAExperience.Gained = 0
-    return false
-end
+-- Old CheckExpChanged and CheckAAExpChanged functions (and Emu versions) are REMOVED
+-- as data is now sourced from the database by xp_collector.lua
 
 local function CommandHandler(...)
     local args = { ..., }
     if args[1] == "reset" then
-        ClearStats()
-        printf("\aw[\atXP Track\ax] \aoStats Reset")
+        ClearStats() -- Now just clears plot
+        if mq and mq.printf then mq.printf("\20XPTrackUI: \aoPlot Cleared.") end
     elseif args[1] == 'exit' then
         openGUI = false
+        if db then db:close() end -- Close DB on exit
     end
 end
 
-mq.bind("/xpt", CommandHandler)
-printf("\aw[\atXP Track\ax] \aoCommand: \ay/xpt \aoArgumentss: \aw[\ayreset\aw|\ayexit\aw]")
+mq.bind("/xptui", CommandHandler) -- Changed command to avoid conflict if old /xpt is used elsewhere
+if mq and mq.printf then mq.printf("\20XPTrackUI: \aoCommand: \ay/xptui \aoArguments: \aw[\ayreset\aw|\ayexit\aw]") end
 
-local function GiveTime()
-    local now = math.floor(getTime())
+-- Old GiveTime() function - To be heavily refactored or removed.
+-- Its role was to calculate XP/sec live and populate XPEvents.
+-- Now, data comes from DB. The main loop will just handle UI updates.
+local function SimplifiedGiveTime()
+    -- This function is now mostly a placeholder or for very minimal periodic UI updates
+    -- if not related to data fetching (which is handled in DrawMainWindow or by timers).
 
-    if mq.TLO.EverQuest.GameState() == "INGAME" then
-        if not XPEvents.Exp then
-            while (now % Resolution) ~= 0 do -- wait for first resolution tick then initialize buffer
-                mq.delay(100)
-                now = math.floor(getTime())
-            end
-            XPEvents.Exp = {
-                lastFrame = now,
-                expEvents =
-                    ScrollingPlotBuffer:new(math.ceil(2 * MaxHorizon)),
-            }
-        end
-
-        if not XPEvents.AA then
-            XPEvents.AA = {
-                lastFrame = now,
-                expEvents =
-                    ScrollingPlotBuffer:new(math.ceil(2 * MaxHorizon)),
-            }
-        end
-        if not OnEmu then
-            if CheckExpChanged() then
-                printf(
-                    "\ayXP Gained: \ag%02.3f%% \aw|| \ayXP Total: \ag%02.3f%% \aw|| \ayStart: \am%d \ayCur: \am%d \ayExp/Sec: \ag%2.3f%%",
-                    TrackXP.Experience.Gained / XPTotalDivider,
-                    TrackXP.Experience.Total / XPTotalDivider,
-                    TrackXP.StartTime,
-                    now,
-                    TrackXP.Experience.Total / XPTotalDivider /
-                    (math.floor(now / Resolution) * Resolution - TrackXP.StartTime))
-            end
-
-            if mq.TLO.Me.PctAAExp() > 0 and CheckAAExpChanged() then
-                printf("\ayAA Gained: \ag%2.2f \aw|| \ayAA Total: \ag%2.2f",
-                    TrackXP.AAExperience.Gained / XPTotalDivider / 100,
-                    TrackXP.AAExperience.Total / XPTotalDivider / 100)
-            end
-        else
-            if CheckExpChangedEmu() then
-                printf(
-                    "\ayXP Gained: \ag%02.3f%% \aw|| \ayXP Total: \ag%02.3f%% \aw|| \ayStart: \am%d \ayCur: \am%d \aw|| \ayExp/Min: \ag%2.3f%%  \ayExp/Hr: \ag%2.3f%%",
-                    TrackXP.Experience.Gained,
-                    TrackXP.Experience.Total,
-                    TrackXP.StartTime,
-                    now,
-                    (XPPerSecond * 60),
-                    (XPPerSecond * 3600))
-            end
-
-            if mq.TLO.Me.PctAAExp() > 0 and CheckAAExpChangedEmu() then
-                printf("\ayAA Gained: \ag%2.2f%% \aw|| \ayAA Total: \ag%2.2f%%, \aw|| \ayAA/Min: \ag%2.2f%% \aw|| \ayAA/Hr: \ag%2.1f pts",
-                    TrackXP.AAExperience.Gained,
-                    TrackXP.AAExperience.Total,
-                    (AAXPPerSecond * 60),
-                    (AAXPPerSecond * 36))
-            end
+    -- The old logic for calculating XP rates and TTL/TTA is removed.
+    -- Max Y value for plot (GoalMaxExpPerSec) is now updated when data is fetched.
+    -- LastExtentsCheck logic might be adapted if dynamic plot scaling needs to be smoother.
+    if get_current_local_time() - LastExtentsCheck > 0.5 then -- Keep this for smooth Y-axis transition
+        LastExtentsCheck = get_current_local_time()
+        -- Smoothly adjust CurMaxExpPerSec towards GoalMaxExpPerSec
+        if CurMaxExpPerSec < GoalMaxExpPerSec then
+            CurMaxExpPerSec = CurMaxExpPerSec + (GoalMaxExpPerSec - CurMaxExpPerSec) * 0.1
+            if GoalMaxExpPerSec - CurMaxExpPerSec < 1 then CurMaxExpPerSec = GoalMaxExpPerSec end
+        elseif CurMaxExpPerSec > GoalMaxExpPerSec then
+            CurMaxExpPerSec = CurMaxExpPerSec - (CurMaxExpPerSec - GoalMaxExpPerSec) * 0.1
+            if CurMaxExpPerSec - GoalMaxExpPerSec < 1 then CurMaxExpPerSec = GoalMaxExpPerSec end
         end
     end
 
-    if mq.TLO.EverQuest.GameState() == "INGAME" and now > LastEntry and (now % Resolution) ~= 0 then -- if not at resolution tick, just insert the previous data again
-        LastEntry = now
-        XPEvents.Exp.lastFrame = now
-        ---@diagnostic disable-next-line: undefined-field
-        XPEvents.Exp.expEvents:AddPoint(now, XPPerSecond * 60 * 60 * multiplier, TrackXP.Experience.Total)
-        XPEvents.AA.lastFrame = now
-        ---@diagnostic disable-next-line: undefined-field
-        XPEvents.AA.expEvents:AddPoint(now, AAXPPerSecond * 60 * 60, TrackXP.AAExperience.Total)
-    elseif mq.TLO.EverQuest.GameState() == "INGAME" and now > LastEntry and (now % Resolution) == 0 then -- if at resolution tick, do proper calculation
-        LastEntry = now
-        if first_tick == 0 then first_tick = now end
-        local totalevents = #XPEvents.Exp.expEvents.TotalXP
-        local rolled = (totalevents == 2 * MaxHorizon) -- double horizon so we can still recalc XPS values
-        offset = XPEvents.Exp.expEvents.Offset
-        local horizon = settings.Horizon
-        horizon_or_less = math.min(horizon, math.max(Resolution, (math.floor((totalevents) / Resolution) * Resolution)))
-
-        if rolled then                        -- we're full, just go round + 1 (because we have not yet entered the value)
-            trackback = ((offset - 1 - horizon) % (totalevents + 1)) + 1
-        elseif totalevents + 1 > horizon then -- can go back at least one horizon_ticks before hitting start + 1 (because we have not yet entered the value)
-            trackback = totalevents + 1 - horizon
-        else                                  -- not a full horizon tick yet, take partials (only every Resolution tick)
-            trackback = 1
-        end
-
-        if XPEvents.Exp.expEvents.TotalXP[trackback] then
-            PrevXPTotal = XPEvents.Exp.expEvents.TotalXP[trackback]
-        else
-            PrevXPTotal = TrackXP.Experience.Total
-        end
-        if XPEvents.AA.expEvents.TotalXP[trackback] then
-            PrevAATotal = XPEvents.AA.expEvents.TotalXP[trackback]
-        else
-            PrevAATotal = TrackXP.AAExperience.Total
-        end
-
-        XPPerSecond            = ((TrackXP.Experience.Total - PrevXPTotal) / XPTotalDivider) / horizon_or_less
-        XPToNextLevel          = XPTotalPerLevel - mq.TLO.Me.Exp()
-        AAXPPerSecond          = ((TrackXP.AAExperience.Total - PrevAATotal) / XPTotalDivider) / horizon_or_less
-
-        AAXPPerSecond          = AAXPPerSecond / (OnEmu and 1 or 100) -- divide by 100 to get full AA, not % values
-        SecondsToLevel         = XPToNextLevel / (XPPerSecond * XPTotalDivider) / ((XPTotalPerLevel / XPTotalDivider) / 100)
-        TimeToLevel            = XPPerSecond <= 0 and "<Unknown>" or FormatTime(SecondsToLevel, "%d Days %d Hours %d Mins")
-
-        local XPToNextAA       = 100 - mq.TLO.Me.PctAAExp()
-        SecondsToAA            = XPToNextAA / (AAXPPerSecond * XPTotalDivider)
-        TimeToAA               = AAXPPerSecond <= 0 and "<Unknown>" or FormatTime(SecondsToAA, "%d Days %d Hours %d Mins")
-
-        XPEvents.Exp.lastFrame = now
-        ---@diagnostic disable-next-line: undefined-field
-        XPEvents.Exp.expEvents:AddPoint(now, XPPerSecond * 60 * 60 * multiplier, TrackXP.Experience.Total)
-
-
-        XPEvents.AA.lastFrame = now
-        ---@diagnostic disable-next-line: undefined-field
-        XPEvents.AA.expEvents:AddPoint(now, AAXPPerSecond * 60 * 60, TrackXP.AAExperience.Total)
-    end
-
-    if now - LastExtentsCheck > 0.5 then
-        local newGoal = 0
-        local totalevents = #XPEvents.Exp.expEvents.TotalXP
-        local rolled = (totalevents == 2 * MaxHorizon)
-        local div = 1
-        local multiplier2 = multiplier
-        local horizon = settings.Horizon
-
-        local horizonChanged = HorizonChanged
-
-        if horizonChanged == true and debug then
-            print("BEFORE ---------------------------------------------------------->")
-            print("#: " .. #XPEvents.AA.expEvents.TotalXP)
-            print("Offset: " .. XPEvents.AA.expEvents.Offset)
-            print("horizon: " .. horizon)
-            for idx, exp in ipairs(XPEvents.AA.expEvents.DataY) do
-                print(idx .. " - EXP Y: " .. XPEvents.AA.expEvents.DataY[idx] .. " - total: " .. XPEvents.AA.expEvents.TotalXP[idx])
-            end
-        end
-
-        LastExtentsCheck = now
-        for id, expData in pairs(XPEvents) do
-            if id == "AA" then
-                div = 100
-                multiplier2 = 1
-            else
-                div = 1
-                multiplier2 = multiplier
-            end
-            for idx, exp in ipairs(expData.expEvents.DataY) do
-                -- is this entry visible?
-                local curGoal = math.ceil(exp / MaxStep * MaxStep * 1.25)
-                local visible = expData.expEvents.DataX[idx] > (now - MaxHorizon)
-
-                if visible then
-                    if curGoal > newGoal then
-                        newGoal = curGoal
-                    end
-                    if horizonChanged then
-                        if rolled then -- we're full, just go round
-                            expData.expEvents.DataY[idx] = ((((expData.expEvents.TotalXP[idx] - expData.expEvents.TotalXP[((idx - 1 - horizon) % totalevents) + 1]) / XPTotalDivider) / horizon) /
-                                div) * 60 * 60 * multiplier2
-                        elseif idx > horizon then -- can go back at least one horizon_ticks before hitting start
-                            expData.expEvents.DataY[idx] = ((((expData.expEvents.TotalXP[idx] - expData.expEvents.TotalXP[idx - horizon]) / XPTotalDivider) / horizon) /
-                                div) * 60 * 60 * multiplier2
-                        else -- not a full horizon tick yet, take partials (only every Resolution tick)
-                            expData.expEvents.DataY[idx] = ((((expData.expEvents.TotalXP[idx] - expData.expEvents.TotalXP[1]) / XPTotalDivider) / math.max(Resolution, (math.floor((idx) / Resolution) * Resolution))) / div) *
-                                60 * 60 * multiplier2
-                        end
-                    end
-                end
-            end
-        end
-        GoalMaxExpPerSec = newGoal
-        if horizonChanged == true and debug then
-            print("AFTER <---------------------------------------------------------")
-            print("#: " .. #XPEvents.AA.expEvents.TotalXP)
-            print("Offset: " .. XPEvents.AA.expEvents.Offset)
-            print("horizon: " .. horizon)
-            for idx, exp in ipairs(XPEvents.AA.expEvents.DataY) do
-                print(idx .. " - EXP Y: " .. XPEvents.AA.expEvents.DataY[idx] .. " - total: " .. XPEvents.AA.expEvents.TotalXP[idx])
-            end
-        end
-        HorizonChanged = false
-    end
+    -- HorizonChanged flag processing (old logic) is mostly handled by re-fetching data.
+    -- HorizonChanged = false -- Resetting here might be too aggressive if fetch fails.
 end
 
--- TODO: check for persona / other char switch and reset stats?
 
-mq.imgui.init('xptracker', DrawMainWindow)
+mq.imgui.init('xptrackui', DrawMainWindow) -- Changed ImGui context name slightly
 while openGUI do
-    GiveTime()
-    mq.delay(100)
+    -- Try to connect to DB if not already connected (e.g. if script started before collector made the DB)
+    if not db then
+        if connect_and_init_db() then
+            refresh_available_profiles() -- Refresh profiles if connection succeeds
+        end
+    end
+
+    SimplifiedGiveTime() -- Call the simplified version
+    mq.delay(100) -- Main loop delay
+end
+
+-- Cleanup on script end (if loop is broken by openGUI = false)
+if db then
+    db:close()
+    if mq and mq.printf then mq.printf("\20XPTrackUI: \agDatabase connection closed.") end
 end
