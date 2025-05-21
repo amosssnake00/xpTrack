@@ -40,7 +40,7 @@ function ScrollingPlotBuffer:AddPoint(x, y, z)
     end
 end
 
-function ScrollingPlotBuffer:Cleare()
+function ScrollingPlotBuffer:Clear()
     self.DataX = {}
     self.DataY = {}
     self.TotalXP = {}

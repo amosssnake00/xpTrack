@@ -143,7 +143,7 @@ function M.list_profile_tables(db)
 
     for row_table_name in stmt:nrows() do
         local table_name = row_table_name.name
-        local _, _, s_server, s_char = string.match(table_name, "^xp_data_([^_]+)_([^_]+)$")
+        local s_server, s_char = string.match(table_name, "^xp_data_([^_]+)_([^_]+)$")
         print(string.format("Found table name '%s', server '%s', char '%s'", table_name, s_server, s_char))
         if s_server and s_char then
             table.insert(profiles, { server = s_server, character = s_char, table_name = table_name })

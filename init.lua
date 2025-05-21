@@ -198,8 +198,8 @@ function fetch_recent_data(db_conn, table_to_query, duration_seconds)
         if mq and printf then printf("\20XPTrackUI: \arError preparing recent data query for %s: %s", table_to_query, err or db_conn:errmsg()) end
         return results
     end
-    for timestamp, xp_gain, aa_xp_gain in stmt:nrows() do
-        table.insert(results, {timestamp = timestamp, xp_gain = xp_gain, aa_xp_gain = aa_xp_gain})
+    for row in stmt:nrows() do
+        table.insert(results, {timestamp = row.timestamp, xp_gain = row.xp_gain, aa_xp_gain = row.aa_xp_gain})
     end
     stmt:finalize()
     debug_log(function() return string.format("fetch_recent_data for %s: Fetched %d records.", table_to_query, #results) end)
@@ -229,8 +229,8 @@ function fetch_historical_data(db_conn, table_to_query, start_utc_timestamp, end
         if mq and printf then printf("\20XPTrackUI: \arError preparing historical data query for %s: %s", table_to_query, err or db_conn:errmsg()) end
         return results, query_granularity
     end
-    for timestamp, xp_gain, aa_xp_gain, gran in stmt:nrows() do
-        table.insert(results, {timestamp = timestamp, xp_gain = xp_gain, aa_xp_gain = aa_xp_gain, granularity = gran})
+    for row in stmt:nrows() do
+        table.insert(results, {timestamp = row.timestamp, xp_gain = row.xp_gain, aa_xp_gain = row.aa_xp_gain, granularity = row.granularity})
     end
     stmt:finalize()
     debug_log(function() return string.format("fetch_historical_data for %s: Fetched %d records with granularity %d.", table_to_query, #results, query_granularity) end)
